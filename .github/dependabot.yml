@@ -1,0 +1,71 @@
+# Dependabot configuration.
+#
+# WHY THIS FILE LOOKS THE WAY IT DOES
+# -----------------------------------
+# Upstream agent-universe v2.5.6 configured Dependabot for exactly three things:
+# `cargo` rooted at `gsn-core`, `pip`, and `github-actions`. It never scanned the
+# npm package at `sdks/js` — the one package it actually published to a registry
+# — so the JavaScript dependency tree could drift arbitrarily far behind on
+# security fixes with nothing reporting it.
+#
+# This file covers every ecosystem in the tree, including that npm package.
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/sdks/js"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:15"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
+    directory: "/sdks/python"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:30"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    # The Python SDK is dependency-free by design (see the `python` job in
+    # .github/workflows/ci.yml, which asserts no third-party crypto package is
+    # importable). The entry stays so that a development-only requirements file
+    # is still covered the moment one appears.
+    groups:
+      pip-minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:45"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    # Actions are pinned to exact versions in every workflow, so this is the
+    # mechanism that keeps those pins current without letting them float.
+    groups:
+      actions-all:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

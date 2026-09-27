@@ -1,0 +1,23 @@
+[package]
+name = "nau-net"
+description = "NewAgentUniverse transport port and overlay utilities: a real length-prefixed TCP transport, an explicitly-named in-memory transport for tests, a deterministic Lv1-Lv7 layered topology and a capacity-enforcing relay pool. Pure Rust, no libp2p."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
