@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+# Single source of truth for the Rust side version.
+# The project version lives in exactly two machine-readable places:
+#   * VERSION            (plain text, used by scripts + CI + SDKs)
+#   * [workspace.package] version here
+# `cargo test -p nau-core --test version_consistency` fails if they ever diverge.
+version = "1.0.1"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["NewAgentUniverseByDeepSeek contributors", "TwinsEarth (original Agent Universe design, MIT)"]
+repository = "https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek"
+homepage = "https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek"
+keywords = ["agent", "p2p", "decentralized", "marketplace", "swarm"]
+categories = ["network-programming", "concurrency"]
+
+[workspace.dependencies]
+nau-core = { path = "crates/nau-core", version = "1.0.1" }
+nau-ledger = { path = "crates/nau-ledger", version = "1.0.1" }
+nau-consensus = { path = "crates/nau-consensus", version = "1.0.1" }
+nau-store = { path = "crates/nau-store", version = "1.0.1" }
+nau-market = { path = "crates/nau-market", version = "1.0.1" }
+nau-net = { path = "crates/nau-net", version = "1.0.1" }
+nau-agent = { path = "crates/nau-agent", version = "1.0.1" }
+nau-node = { path = "crates/nau-node", version = "1.0.1" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "net",
+    "io-util",
+    "signal",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Dependency policy (see docs/ARCHITECTURE.md §0):
+# The workspace deliberately stays on a *small* dependency tree. Upstream
+# agent-universe v2.5.6 pulls libp2p + rusqlite(bundled) + a hand-rolled HTTP
+# stack, which needs a C toolchain and ~4 GB of RAM to compile on 8 parallel
+# rustc jobs. We instead define our own ports (Transport / Store / LlmProvider)
+# so the default build is pure Rust, has zero C dependencies, and compiles on a
+# 16 GB laptop with `jobs = 2`.
+
+[profile.dev]
+# debuginfo is the single largest memory consumer during rustc codegen.
+# Dropping it keeps `cargo test` viable on low-RAM machines (see .cargo/config.toml).
+debug = 0
+incremental = true
+
+[profile.test]
+debug = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = 0

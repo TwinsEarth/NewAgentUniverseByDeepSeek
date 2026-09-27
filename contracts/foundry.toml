@@ -1,0 +1,79 @@
+# Foundry configuration for the NewAgentUniverseByDeepSeek contract set.
+#
+# Upstream agent-universe v2.5.6 shipped four `.sol` files with NO compiler
+# config of any kind — no solc version, no remappings, no test directory. That is
+# why three of the four were not deployable: no tool had ever been pointed at
+# them. This file is the minimum that makes the tree buildable and testable from
+# a clean clone.
+
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+
+# Pinned, not floating. `^0.8.24` in the sources plus an explicit `solc_version`
+# means a local build and CI agree on the compiler.
+solc_version = "0.8.24"
+
+# Optimiser on, with a size-oriented runs count: these contracts are verified on
+# chain and the settlement bytecode is the largest of the four.
+optimizer = true
+optimizer_runs = 200
+
+# Warnings are surfaced in the job log but do not fail the build; `forge fmt
+# --check` is the formatting gate and it runs as its own CI step.
+deny_warnings = false
+
+# `cancun` is required by solc 0.8.24 and is the current mainnet target.
+evm_version = "cancun"
+
+# Deterministic test deployment addresses.
+sender = "0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38"
+tx_origin = "0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38"
+
+# Keep fuzz runs modest so `forge test -vvv` fits in a CI job budget; the
+# invariant suite composes with this (see `[invariant]`).
+fuzz = { runs = 512, max_test_rejects = 65536 }
+
+[profile.default.invariant]
+runs = 256
+depth = 32
+fail_on_revert = false
+
+# CI profile: identical, but refuses to run if `forge fmt --check` was skipped.
+# (`forge fmt --check` is a separate step in `.github/workflows/ci.yml`.)
+[profile.ci]
+verbosity = 3
+
+# ---------------------------------------------------------------------------
+# Remappings
+# ---------------------------------------------------------------------------
+# The ONLY external dependency is forge-std, used exclusively by `test/` and
+# `script/`. Everything the contracts themselves need lives in
+# `src/base/` (Ownable, ReentrancyGuard, ERC20), so a production build has no
+# third-party code in it at all.
+#
+# Fetch it once, after cloning:
+#
+#     cd contracts
+#     forge install foundry-rs/forge-std@v1.9.4 --no-commit
+#
+# `v1.9.4` is the pinned tag; see `contracts/README.md` for the exact commands
+# and for the reason OpenZeppelin is deliberately NOT a dependency.
+remappings = ["forge-std/=lib/forge-std/src/"]
+
+# ---------------------------------------------------------------------------
+# Formatter
+# ---------------------------------------------------------------------------
+# `forge fmt --check` in CI uses these settings, so the checked-in sources must
+# already match them.
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+multiline_func_header = "attributes_first"
+quote_style = "double"
+number_underscore = "thousands"

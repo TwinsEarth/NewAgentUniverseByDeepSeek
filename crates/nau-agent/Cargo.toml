@@ -1,0 +1,26 @@
+[package]
+name = "nau-agent"
+description = "NewAgentUniverse agent-side ports: layered memory (individual / swarm / cross-generation) with a real SHA-256 provenance chain, and an LlmProvider port with integer-only budgets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+# `macros` + `io-util` are only needed to drive the async provider port and the
+# stdio transport from tests; the library itself declares no tokio features.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

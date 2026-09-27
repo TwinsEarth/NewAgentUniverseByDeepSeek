@@ -1,0 +1,19 @@
+[package]
+name = "nau-consensus"
+description = "NewAgentUniverse BFT-lite committee: a fixed assigned member set, cryptographically signed and authenticated votes, checked 3f+1 arithmetic, safety-violation and equivocation detection, and a view change that preserves the equivocation record. No I/O, no async."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
