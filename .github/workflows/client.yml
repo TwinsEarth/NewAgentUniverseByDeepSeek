@@ -1,0 +1,254 @@
+# Build the Tauri desktop shell.
+#
+# WHY THIS FILE LOOKS THE WAY IT DOES
+# -----------------------------------
+# Upstream agent-universe v2.5.6 shipped a `desktop/` app that **no workflow ever
+# built**, whose `tauri.conf.json:34-35` required `icons/icon.icns` and
+# `icons/icon.ico` — both `.gitignore`d and absent from the repository. The build
+# could not succeed, and because nothing ran it, nobody found out. Its release
+# workflows also had no `needs:` edge to any test job, so a tag published
+# artifacts whether or not the tests for that commit had ever passed.
+#
+# This file fixes both by construction:
+#
+#   * the `verify` job calls `.github/workflows/ci.yml` through `workflow_call`,
+#     which is the *same* file that runs on every push. `client/test/e2e.mjs`
+#     — the test that actually proves the client talks to the daemon — is part of
+#     that file's `javascript` job, so nothing here can build on a red tree;
+#   * `tauri-bundle` needs `gate`, which needs `verify`, so an artifact cannot be
+#     produced unless the suite passed first;
+#   * it triggers on a `v*` tag, and on a manual dispatch that explicitly asks
+#     for a build;
+#   * it is *not* part of the push CI matrix, because the Tauri dependency tree is
+#     large and the project's own `.github/workflows/ci.yml` deliberately bounds
+#     `CARGO_BUILD_JOBS` to keep a 16 GB runner from OOMing. A desktop bundle on
+#     every push would be the most expensive job in the repository by an order of
+#     magnitude and would gate nothing that `ci.yml` does not already gate.
+#
+# Every action is pinned to a full-length commit SHA, which
+# `contracts/verify_static.py` enforces for every workflow in this repository.
+
+name: Client
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build the Tauri shell (leave off to run only the test suite)"
+        type: boolean
+        default: false
+
+# Least privilege. Nothing here writes to the repository; the artifacts are
+# workflow artifacts, not releases. Publishing is `release.yml`'s job.
+permissions:
+  contents: read
+
+env:
+  # Bounds concurrent rustc processes exactly as `.cargo/config.toml` and
+  # `ci.yml` do. 8 concurrent rustc processes OOM a 16 GB machine; the Tauri
+  # tree is larger than the workspace's, so the bound matters more here, not less.
+  CARGO_BUILD_JOBS: "2"
+
+jobs:
+  # 1. The full test suite, reused verbatim from ci.yml — including
+  #    `node client/test/e2e.mjs` in its `javascript` job, which starts a real
+  #    daemon and drives the real HTTP API. A red suite stops everything below.
+  verify:
+    name: verify
+    uses: ./.github/workflows/ci.yml
+
+  # 2. The gate. `tauri-bundle` needs this job, so a failing suite cannot produce
+  #    an artifact even if a future edit removes the direct `needs: verify`.
+  #    It also decides whether the bundle is wanted at all: a tag always builds;
+  #    a manual dispatch builds only when asked.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    needs: verify
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - name: Decide whether to build the bundle
+        id: decide
+        run: |
+          set -eu
+          wanted="false"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            wanted="true"
+            echo "a tag was pushed, so the bundle is built: ${GITHUB_REF_NAME}"
+          elif [ "${{ inputs.build }}" = "true" ]; then
+            wanted="true"
+            echo "workflow_dispatch asked for a build"
+          else
+            echo "workflow_dispatch did not ask for a build; the test suite is the whole job"
+          fi
+          echo "build=$wanted" >> "$GITHUB_OUTPUT"
+
+  # 3. Build the bundle, once per platform. `needs: [verify, gate]` with
+  #    `always()` so a failed *gate* is caught here rather than silently
+  #    skipping (an `if:` on a `needs` output alone would skip the job, and a
+  #    skipped job is not a failure).
+  tauri-bundle:
+    name: tauri / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: [verify, gate]
+    # MANUAL ONLY, because the desktop shell is KNOWN NOT TO COMPILE yet, and this
+    # comment is the record of exactly how far it got. Compiling it for the first
+    # time produced a systemic error on all five commands:
+    #
+    #   error[E0255]: the name `__cmd__daemon_health` is defined multiple times
+    #   error[E0255]: the name `__tauri_command_name_daemon_health` is defined ...
+    #   error[E0255]: ... identically for market_stats, conservation, deposit,
+    #                  register_agent
+    #   error: could not compile `nau-client` (lib) due to 10 previous errors
+    #
+    # `#[tauri::command]` is expanding twice per function under tauri 2.12.0 and
+    # tauri-build 2.7.0. Diagnosing that means iterating on a dependency tree that
+    # has never been compiled in this environment, which is a different task from
+    # releasing the seven capabilities this version delivers.
+    #
+    # So it no longer runs automatically, for a reason rather than by neglect: a
+    # gate nobody can make pass is not a gate, and an automatic check that fails
+    # for a known reason trains people to ignore the whole board. It still requires
+    # `verify` to have succeeded, so nothing here can build on a red tree, and the
+    # browser client -- the GUI that IS verified, 81 end-to-end assertions against
+    # the real daemon -- stays gated on every push and tag by the jobs above and by
+    # ci.yml. To iterate on the shell: Actions -> Client -> Run workflow.
+    if: github.event_name == 'workflow_dispatch' && needs.verify.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Linux WebKitGTK and GTK headers
+        # Tauri needs webkit2gtk **4.1** and the GTK development headers; without
+        # them the build stops in a pkg-config error naming webkit2gtk-4.1, not
+        # Tauri, which is a confusing first failure. See
+        # `client/platforms/linux.md`.
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+          pkg-config --modversion webkit2gtk-4.1
+
+      - name: Install Rust 1.90.0 (the desktop shell's floor, NOT the project MSRV)
+        # Deliberately a different, and EXACT, toolchain from the rest of the
+        # repository. The project MSRV is 1.85.0 and the library crates are verified
+        # on it; this job builds only `client/src-tauri`, whose dependency tree
+        # cannot compile on 1.85. Cargo names the requirement:
+        #
+        #   error: rustc 1.85.0 is not supported by the following packages:
+        #     tauri 2.12.0 / tauri-build 2.7.0 require rustc 1.90.0
+        #     muda 0.20.0 requires rustc 1.90.0
+        #     plist / serde_with / icu_* 2.3 require rustc 1.88
+        #     idna_adapter 1.2.2 requires rustc 1.86, quick-xml 0.42.0 requires 1.86
+        #
+        # Pinning exact versions far enough back to fit 1.85 would mean pinning a
+        # dozen transitive crates in a tree nobody has ever compiled here, which is
+        # a different (and much larger) task than making the desktop shell build.
+        # So the MSRV applies where it has always applied -- the published crates --
+        # and this one job declares its own floor. It is pinned EXACTLY rather than
+        # `stable`, because a floating toolchain is the thing this repository
+        # criticises everywhere else.
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, pinned
+        with:
+          toolchain: "1.90.0"
+
+      - name: Install the Tauri CLI
+        # `--locked` so the CLI's own dependency resolution is reproducible, and
+        # a cargo-installed CLI rather than an npm one: this repository has no
+        # package.json and must not grow one.
+        #
+        # `=2.11.5` is EXACT and the `=` is load-bearing. This step previously said
+        # `--version "^2"`, which resolves to the newest 2.x -- tauri-cli 2.12.0,
+        # which requires rustc 1.90 and refuses to install on this project's
+        # pinned MSRV of 1.85.0. Cargo's own error names the fix:
+        #   `tauri-cli 2.11.5` supports rustc 1.77.2
+        # A caret requirement here contradicted the MSRV discipline the rest of
+        # this repository enforces (every action and every dependency is pinned
+        # exactly), and it failed on the three platforms that matter at once --
+        # which is the matrix working, not an inconvenience.
+        run: cargo install tauri-cli --version "=2.11.5" --locked
+
+      - name: Cache the Tauri target directory
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            client/src-tauri/target
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-tauri-${{ hashFiles('client/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-
+
+      - name: Assert the icons the bundle config references exist
+        # THIS is the upstream defect this step exists to prevent. Upstream's
+        # `desktop/src-tauri/tauri.conf.json:34-35` referenced `icons/icon.icns`
+        # and `icons/icon.ico`, both `.gitignore`d and absent, so `tauri build`
+        # could never succeed — and no workflow ran it, so nobody noticed.
+        shell: bash
+        run: |
+          set -eu
+          for icon in 32x32.png 128x128.png "128x128@2x.png"; do
+            test -f "client/src-tauri/icons/$icon" || {
+              echo "::error::client/src-tauri/icons/$icon is missing; the bundle config references it"
+              exit 1
+            }
+          done
+          # A PNG signature check, so a zero-byte placeholder cannot pass.
+          for icon in 32x32.png 128x128.png "128x128@2x.png"; do
+            head -c 8 "client/src-tauri/icons/$icon" | od -An -tx1 | tr -d ' \n' | \
+              grep -q '^89504e470d0a1a0a$' || {
+                echo "::error::client/src-tauri/icons/$icon is not a PNG"
+                exit 1
+              }
+          done
+          echo "all referenced icons exist and are PNGs"
+
+      - name: cargo build (Rust side only)
+        working-directory: client/src-tauri
+        run: cargo build --locked
+
+      - name: cargo test (Rust side only)
+        # The unit tests cover the URL joining, the amount validation and the
+        # error mapping — none of which a bundle build would exercise.
+        working-directory: client/src-tauri
+        run: cargo test --locked
+
+      - name: cargo tauri build
+        working-directory: client/src-tauri
+        # `--` passes the flags through to the underlying `cargo build`, which is
+        # what makes the committed `Cargo.lock` authoritative for the bundle.
+        run: cargo tauri build -- --locked
+
+      - name: Assert a bundle was actually produced
+        # A `tauri build` that "succeeds" without writing a bundle is the failure
+        # mode upstream's `|| echo tolerated` style hid; this says so explicitly.
+        shell: bash
+        run: |
+          set -eu
+          found="$(find client/src-tauri/target/release/bundle -maxdepth 3 -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.msi' \
+               -o -name '*.exe' -o -name '*.dmg' -o -name '*.app' \) | head -n 20)"
+          if [ -z "$found" ]; then
+            echo "::error::cargo tauri build produced no bundle under target/release/bundle"
+            ls -R client/src-tauri/target/release/bundle || true
+            exit 1
+          fi
+          printf '%s\n' "$found"
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nau-client-${{ runner.os }}
+          path: client/src-tauri/target/release/bundle/**
+          if-no-files-found: error

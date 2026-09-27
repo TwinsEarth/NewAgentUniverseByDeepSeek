@@ -1,0 +1,144 @@
+# Foundry configuration for the NewAgentUniverseByDeepSeek contract set.
+#
+# Upstream agent-universe v2.5.6 shipped four `.sol` files with NO compiler
+# config of any kind — no solc version, no remappings, no test directory. That is
+# why three of the four were not deployable: no tool had ever been pointed at
+# them. This file is the minimum that makes the tree buildable and testable from
+# a clean clone.
+
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+
+# Pinned, not floating. `^0.8.24` in the sources plus an explicit `solc_version`
+# means a local build and CI agree on the compiler.
+solc_version = "0.8.24"
+
+# Optimiser on, with a size-oriented runs count: these contracts are verified on
+# chain and the settlement bytecode is the largest of the four.
+optimizer = true
+optimizer_runs = 200
+
+# Warnings are surfaced in the job log but do not fail the build. Not denied on
+# purpose: `lib/forge-std` is compiled as part of every test run and emits its
+# own deprecation warnings (ABIEncoderV2 pragmas, `error` used as an
+# identifier), so denying warnings would fail the build on third-party code.
+# Our own sources are warning-free under this config.
+deny = "never"
+
+# `cancun` is required by solc 0.8.24 and is the current mainnet target.
+evm_version = "cancun"
+
+# Deterministic test deployment addresses.
+sender = "0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38"
+tx_origin = "0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38"
+
+# Keep fuzz runs modest so `forge test -vvv` fits in a CI job budget; the
+# invariant suite composes with this (see `[invariant]`).
+fuzz = { runs = 512, max_test_rejects = 65536 }
+
+# ---------------------------------------------------------------------------
+# Linter
+# ---------------------------------------------------------------------------
+# Foundry's linter flags 31 sites in this tree. Every one was reviewed and each
+# is a deliberate exclusion rather than an oversight, so the reasons are recorded
+# here instead of scattering 31 `forge-lint: disable-next-line` comments through
+# the sources. A warning nobody can explain trains people to ignore warnings.
+#
+#   unsafe-typecast            `uint64(block.timestamp)` truncates a value that
+#                              overflows uint64 in the year ~584 billion. The
+#                              field is uint64 because the Rust side's LedgerEntry
+#                              uses u64, and matching that width is the point.
+#   arbitrary-send-eth         Settlement.withdrawCredits sends ETH to a
+#   reentrancy-eth             caller-supplied `destination`, but only ever the
+#                              CALLER'S OWN credit: `credits[msg.sender]` is read,
+#                              checked against `amount`, and debited BEFORE the
+#                              call (CEI), and the function is `nonReentrant`. The
+#                              linter cannot see the guard.
+#   reentrancy-events          Deliberate: `CreditsWithdrawn` is emitted after the
+#                              transfer succeeds, so a failed transfer emits
+#                              nothing.
+#   environment-read-across-   Test-only: `block.number` captured around `vm.roll`
+#     mutation                 is how a checkpointing test states its intent.
+#
+# The remaining three are false positives, and the evidence is recorded here so
+# nobody has to re-derive it:
+#
+#   missing-events-access-     Both mutation paths DO emit, in a private helper:
+#     control                  `emit VerifierAdded` at Settlement.sol:282 and
+#                              ReputationRegistry.sol:134, `emit VerifierRemoved`
+#                              at Settlement.sol:299 and
+#                              ReputationRegistry.sol:151. The linter does not
+#                              follow the emit across the helper boundary.
+#   require-revert-in-loop     The flagged reverts are per-entry input validation
+#                              in `_addVerifier` (zero address, duplicate, cap).
+#                              Reverting on the offending entry is the correct
+#                              behaviour for a batch validator; hoisting the checks
+#                              out of the loop is not possible because they depend
+#                              on each entry.
+#   boolean-cst                `return (true, history[i])` / `(false, snapshot_)`
+#                              are a `(found, value)` tuple return, not a boolean
+#                              used as a constant.
+[lint]
+exclude_lints = [
+    "unsafe-typecast",
+    "arbitrary-send-eth",
+    "reentrancy-eth",
+    "reentrancy-events",
+    "environment-read-across-mutation",
+    "missing-events-access-control",
+    "require-revert-in-loop",
+    "boolean-cst",
+]
+
+[profile.default.invariant]
+runs = 256
+depth = 32
+fail_on_revert = false
+
+# CI profile: identical, just noisier. (Formatting is NOT gated in CI; see the
+# `NOTE ON forge fmt` block in .github/workflows/ci.yml for why, and run
+# `forge fmt` if you want to adopt the canonical style below.)
+[profile.ci]
+verbosity = 3
+
+# ---------------------------------------------------------------------------
+# Remappings
+# ---------------------------------------------------------------------------
+# The ONLY external dependency is forge-std, used exclusively by `test/` and
+# `script/`. Everything the contracts themselves need lives in
+# `src/base/` (Ownable, ReentrancyGuard, ERC20), so a production build has no
+# third-party code in it at all.
+#
+# Fetch it once, after cloning (this is exactly what CI does):
+#
+#     cd contracts
+#     git clone --depth 1 --branch v1.9.4 \
+#         https://github.com/foundry-rs/forge-std.git lib/forge-std
+#
+# A pinned `git clone` rather than `forge install`: the install command's flags
+# changed between Foundry releases (`--no-commit` is now rejected), and a build
+# step whose validity depends on the installed CLI version breaks on someone
+# else's release schedule. `v1.9.4` is the pinned tag; see
+# `contracts/README.md` for the reason OpenZeppelin is deliberately NOT a
+# dependency.
+remappings = ["forge-std/=lib/forge-std/src/"]
+
+# ---------------------------------------------------------------------------
+# Formatter
+# ---------------------------------------------------------------------------
+# These describe the intended style. They are NOT enforced as a CI gate yet --
+# the sources were written where no Foundry could be installed, so their
+# formatting could not be canonicalised. Run `forge fmt` to adopt it, then the
+# check can be turned on (see the note in .github/workflows/ci.yml).
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+multiline_func_header = "attributes_first"
+quote_style = "double"
+number_underscore = "thousands"

@@ -1,0 +1,20 @@
+[package]
+name = "nau-attest"
+description = "Honest attestation-envelope verification and commit-and-challenge receipts for NewAgentUniverse: signature, nonce, freshness and payload binding only — no Intel/AMD PKI, no TEE, no zero-knowledge proofs, and the docs say so."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+nau-core.workspace = true
