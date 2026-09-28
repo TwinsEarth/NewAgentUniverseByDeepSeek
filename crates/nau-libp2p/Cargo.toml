@@ -70,7 +70,7 @@ futures = { version = "0.3", default-features = false, features = [
 # GossipSub, Circuit Relay v2, AutoNAT, DCUtR, identify and ping — and it builds
 # on 1.85. See `docs` in `src/lib.rs` for what that costs (no QUIC, no DNS
 # resolution: bootstrap addresses must be IP-based multiaddrs).
-libp2p = { version = "0.56.0", default-features = false, features = [
+libp2p = { version = "0.57.0", default-features = false, features = [
     "tokio",
     "macros",
     "tcp",
