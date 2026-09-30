@@ -1,0 +1,25 @@
+[package]
+name = "nau-core"
+description = "NewAgentUniverse core domain: identity (DID + Ed25519), canonical JSON payloads, deterministic signing, money and domain types. No I/O, no async."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Conformance vectors are loaded from ../conformance/vectors.json by
+# tests/conformance_vectors.rs, so no extra dev-dependency is required.

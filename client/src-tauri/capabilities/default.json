@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the shell window. The five commands in src/lib.rs are invoked from ui/shell.js; `core:default` covers the invoke bridge itself.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

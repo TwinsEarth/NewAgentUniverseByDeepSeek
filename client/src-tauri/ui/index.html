@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NewAgentUniverse — desktop shell</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #14181d;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --line: #d8dde3;
+        --muted: #5a6572;
+        --bad: #a4232b;
+        --mono: ui-monospace, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e6e9ee;
+          --bg: #14181d;
+          --panel: #1c2229;
+          --line: #2c343d;
+          --muted: #9aa5b1;
+          --bad: #ff8a8a;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 1.25rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.5 system-ui, sans-serif;
+      }
+      h1 {
+        font-size: 1.2rem;
+        margin: 0 0 0.25rem;
+      }
+      p {
+        margin: 0.25rem 0 0.75rem;
+        color: var(--muted);
+        max-width: 70ch;
+      }
+      code,
+      pre,
+      dd {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+      }
+      button {
+        font: inherit;
+        margin-right: 0.4rem;
+        margin-bottom: 0.4rem;
+        padding: 0.35rem 0.7rem;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.9rem 1rem;
+        margin-bottom: 0.9rem;
+      }
+      .row input {
+        font: inherit;
+        font-family: var(--mono);
+        padding: 0.3rem 0.45rem;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.15rem 0.75rem;
+        margin: 0.5rem 0 0;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      pre {
+        margin: 0.5rem 0 0;
+        padding: 0.6rem 0.7rem;
+        min-height: 3rem;
+        max-height: 18rem;
+        overflow: auto;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        white-space: pre-wrap;
+      }
+      .error {
+        color: var(--bad);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>NewAgentUniverse desktop shell</h1>
+    <p>
+      Every button below calls a Rust command in <code>src-tauri/src/lib.rs</code>, which performs a
+      real HTTP request against <code>nau-daemon</code>. Unlike upstream's shell — 36 lines of Rust
+      exposing two commands that no frontend ever invoked — nothing here returns a constant.
+    </p>
+    <p>
+      <strong>Unbuilt shell.</strong> This Tauri crate has never been compiled (see
+      <code>client/README.md</code> §7 and <code>client/platforms/</code>). The verified client is the
+      browser UI in <code>client/index.html</code>.
+    </p>
+
+    <div class="panel">
+      <h2>Daemon</h2>
+      <button type="button" id="health">daemon_health()</button>
+      <button type="button" id="stats">market_stats()</button>
+      <button type="button" id="conservation">conservation()</button>
+      <dl>
+        <dt>daemon url</dt>
+        <dd id="daemon-url">…</dd>
+      </dl>
+      <pre id="log" aria-live="polite"></pre>
+    </div>
+
+    <div class="panel">
+      <h2>Account</h2>
+      <div class="row">
+        <input id="account" type="text" size="34" placeholder="did:nau:…" />
+        <input id="amount" type="text" size="10" value="12.5" />
+        <button type="button" id="deposit">deposit()</button>
+      </div>
+      <p>
+        <code>amount</code> is a decimal <strong>string</strong>. The Rust signature takes
+        <code>String</code>, not <code>f64</code>, because the API refuses floats with
+        <code>422</code> on purpose.
+      </p>
+      <pre id="account-log" aria-live="polite"></pre>
+    </div>
+
+    <div class="panel">
+      <h2>Agent card</h2>
+      <p>
+        Paste an already-signed <code>AgentCard</code> JSON. The shell cannot sign for you: the daemon
+        verifies the Ed25519 signature and the DID↔key binding, so a card without a real signature is
+        refused with <code>401</code>. Use the browser client to mint one.
+      </p>
+      <textarea id="card" rows="7" cols="80" spellcheck="false">{}</textarea>
+      <p><button type="button" id="register">register_agent()</button></p>
+      <pre id="card-log" aria-live="polite"></pre>
+    </div>
+
+    <script type="module" src="shell.js"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+[package]
+name = "nau-mcp"
+description = "NewAgentUniverse MCP server: one tool definition drives schema generation, argument validation and dispatch; JSON-RPC 2.0 wire shapes with real version negotiation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `io-util` provides `AsyncBufRead` / `AsyncWrite` and the line-reading helpers
+# used by the newline-delimited stdio transport. No runtime is started here.
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

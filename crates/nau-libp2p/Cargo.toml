@@ -1,0 +1,89 @@
+[package]
+name = "nau-libp2p"
+description = "NewAgentUniverse libp2p-backed transport: Kademlia DHT, GossipSub, Circuit Relay v2, AutoNAT and DCUtR composed into one swarm, adapted onto the nau_net::Transport port. The libp2p dependency is optional and OFF by default so the default workspace build stays pure Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# The real libp2p stack. OFF by default so `cargo build --workspace` stays light;
+# CI builds it in its own job with `--features libp2p`.
+libp2p = ["dep:libp2p", "dep:tokio", "dep:futures"]
+
+[dependencies]
+nau-core.workspace = true
+nau-net.workspace = true
+# The identity seam needs the Ed25519 public key for a seed. Delegating to the
+# same `ed25519-dalek` build `nau-core` already links keeps exactly one Ed25519
+# implementation in the workspace; writing the scalar multiplication here would
+# be a second one. `nau-core` is already a mandatory dependency, so its crypto is
+# already in the default build and this adds no weight libp2p does not.
+ed25519-dalek.workspace = true
+sha2.workspace = true
+# OS entropy for the gossip envelope nonce: a predictable nonce makes duplicate
+# suppression forgeable.
+rand.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+# Optional: only compiled when the `libp2p` feature is on. `tracing` is *not*
+# optional because the feature-independent modules log nothing but the adapter
+# and the event loop do; keeping it unconditional means the crate has one
+# dependency set to reason about instead of two.
+tracing.workspace = true
+tokio = { workspace = true, features = [
+    "rt",
+    "macros",
+    "sync",
+    "time",
+], optional = true }
+# The event loop polls the swarm with `futures::StreamExt::select_next_some`, and
+# the swarm implements `futures::Stream` (not `tokio::Stream`), so the futures
+# crate is load-bearing rather than incidental.
+futures = { version = "0.3", default-features = false, features = [
+    "std",
+], optional = true }
+# 0.57.0 declares rust-version = 1.88, which is above this project's MSRV of
+# 1.85, so the pin is deliberate rather than "whatever was newest". 0.56.0
+# declares rust-version = 1.83 and therefore compiles on the pinned toolchain.
+#
+# The feature list is written out instead of using upstream's `full`, and the
+# omission is load-bearing rather than cosmetic. `full` enables `websocket` and
+# `webtransport-websys`, which pull `rustls`/`webpki` and `x509-parser`, which
+# pull `time` and `idna_adapter` versions whose own `rust-version` is 1.86–1.88.
+# Cargo refuses those outright on the pinned 1.85 toolchain:
+#
+#     error: rustc 1.85.0 is not supported by the following packages:
+#       time@0.3.55 requires rustc 1.88.0
+#       idna_adapter@1.2.2 requires rustc 1.86
+#
+# So `dns`, `quic`, `tls` and `websocket` are deliberately absent: DNS pulls the
+# idna chain and QUIC/TLS/WebSocket pull the time/rustls chain. What is enabled
+# is exactly the stack the brief asks for — TCP, Noise, Yamux, Kademlia,
+# GossipSub, Circuit Relay v2, AutoNAT, DCUtR, identify and ping — and it builds
+# on 1.85. See `docs` in `src/lib.rs` for what that costs (no QUIC, no DNS
+# resolution: bootstrap addresses must be IP-based multiaddrs).
+libp2p = { version = "0.56.0", default-features = false, features = [
+    "tokio",
+    "macros",
+    "tcp",
+    "noise",
+    "yamux",
+    "kad",
+    "gossipsub",
+    "relay",
+    "autonat",
+    "dcutr",
+    "identify",
+    "ping",
+], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

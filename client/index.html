@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      A real CSP, unlike upstream agent-universe v2.5.6, whose
+      `client/src-tauri/tauri.conf.json:22` set `"csp": null` while the UI built
+      log lines with `innerHTML` — an XSS sink with nothing left to stop it.
+      There is no `unsafe-inline` here and no remote origin: the page loads three
+      same-origin files and talks to nothing but the daemon through serve.mjs.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <title>NewAgentUniverse — daemon client</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>NewAgentUniverse client</h1>
+      <p class="tagline">
+        Every action on this page is a real HTTP call to a running
+        <code>nau-daemon</code>, signed in this tab with <code>crypto.subtle</code> Ed25519.
+        There is no simulation and no npm dependency: <code>client/lib/nau.mjs</code>
+        is loaded directly as an ES module.
+      </p>
+      <dl class="daemon-health" id="daemon-health">
+        <dt>daemon</dt>
+        <dd id="health-daemon">not contacted yet</dd>
+      </dl>
+    </header>
+
+    <main>
+      <section class="panel" id="panel-identity">
+        <h2>1 · Identity</h2>
+        <p class="hint">
+          A 32-byte seed is imported as PKCS#8 DER (<code>302e020100300506032b657004220420</code>
+          + seed); the raw public key is the last 32 bytes of the SPKI export, and the DID is
+          <code>did:nau:</code> + the first 8 bytes of SHA-256(raw key) in lowercase hex.
+          The daemon verifies the signature and the DID↔key binding itself — this page cannot
+          mint an identity the daemon will accept without the matching private key.
+        </p>
+        <div class="row">
+          <button type="button" id="identity-generate">Generate a random identity</button>
+          <button type="button" id="identity-restore">Load the conformance seed (0x01 × 32)</button>
+        </div>
+        <dl class="kv" id="identity-details">
+          <dt>did</dt>
+          <dd id="identity-did">—</dd>
+          <dt>public key</dt>
+          <dd id="identity-public-key" class="mono">—</dd>
+          <dt>seed (secret, shown so a session can be reproduced)</dt>
+          <dd id="identity-seed" class="mono">—</dd>
+        </dl>
+        <p class="hint" id="identity-note"></p>
+      </section>
+
+      <section class="panel" id="panel-account">
+        <h2>2 · Account: deposit and balance</h2>
+        <p class="hint">
+          <code>POST /accounts/{did}/deposit</code> with <code>{"amount":"12.5"}</code> — a
+          decimal <em>string</em>, because <code>Money</code> is an integer count of minor units
+          and the daemon refuses a JSON float with <code>422</code>. Both paths are shown below;
+          the refusal is reported, not hidden.
+        </p>
+        <div class="field">
+          <label for="deposit-amount">amount (decimal string)</label>
+          <input id="deposit-amount" type="text" value="1000" inputmode="decimal" />
+          <button type="button" id="deposit-submit">Deposit to my DID account</button>
+        </div>
+        <div class="field">
+          <button type="button" id="balance-refresh">Refresh my balance</button>
+          <span class="result" id="account-balance">—</span>
+        </div>
+        <div class="danger-zone">
+          <button type="button" id="deposit-float">Try a float: send <code>12.5</code> as a JSON number</button>
+          <p class="hint">
+            This is expected to fail with <code>422 unprocessable</code>. It is the point of the
+            exercise: a UI that hides a refusal teaches the user nothing.
+          </p>
+        </div>
+        <pre class="log" id="account-log" aria-live="polite"></pre>
+      </section>
+
+      <section class="panel" id="panel-registry">
+        <h2>3 · Agent registry: register, discover, search</h2>
+        <div class="field">
+          <label for="agent-name">name</label>
+          <input id="agent-name" type="text" value="Claude translator" />
+        </div>
+        <div class="field">
+          <label for="agent-skills">skills (comma separated, lowercase)</label>
+          <input id="agent-skills" type="text" value="translation,text-generation" />
+        </div>
+        <div class="field">
+          <label for="agent-stake">stake (decimal)</label>
+          <input id="agent-stake" type="text" value="100" inputmode="decimal" />
+        </div>
+        <div class="row">
+          <button type="button" id="agent-register">Register (signed card)</button>
+          <button type="button" id="agents-list">List all agents</button>
+          <button type="button" id="agents-discover">Discover by skill</button>
+          <button type="button" id="agents-search">Search by text</button>
+        </div>
+        <div class="field">
+          <label for="agents-skill-query">skill for discover</label>
+          <input id="agents-skill-query" type="text" value="translation" />
+        </div>
+        <div class="field">
+          <label for="agents-text-query">text for search</label>
+          <input id="agents-text-query" type="text" value="translator" />
+        </div>
+        <pre class="log" id="registry-log" aria-live="polite"></pre>
+      </section>
+
+      <section class="panel" id="panel-task">
+        <h2>4 · Task lifecycle</h2>
+        <p class="hint">
+          publish → bid → match → start → submit → verify (with signed committee votes) →
+          settle. Each step is one HTTP call, and each object is signed by the identity above.
+        </p>
+        <div class="field">
+          <label for="task-id">task id</label>
+          <input id="task-id" type="text" />
+        </div>
+        <div class="field">
+          <label for="task-goal">goal</label>
+          <input id="task-goal" type="text" value="translate the daemon API reference" />
+        </div>
+        <div class="field">
+          <label for="task-budget">budget (decimal)</label>
+          <input id="task-budget" type="text" value="50" inputmode="decimal" />
+        </div>
+        <div class="field">
+          <label for="task-skills">required skills (comma separated)</label>
+          <input id="task-skills" type="text" value="translation" />
+        </div>
+        <div class="field">
+          <label for="task-bid-price">bid price (decimal)</label>
+          <input id="task-bid-price" type="text" value="40" inputmode="decimal" />
+        </div>
+        <div class="row">
+          <button type="button" id="task-publish">Publish task (signed, escrows the budget)</button>
+          <button type="button" id="task-bid">Submit bid (signed)</button>
+          <button type="button" id="task-match">Match</button>
+          <button type="button" id="task-start">Start</button>
+          <button type="button" id="task-result">Submit result</button>
+          <button type="button" id="task-verify">Verify with 3 signed votes</button>
+          <button type="button" id="task-settle">Settle</button>
+          <button type="button" id="task-show">Show task state</button>
+        </div>
+        <pre class="log" id="task-log" aria-live="polite"></pre>
+      </section>
+
+      <section class="panel" id="panel-invariant">
+        <h2>5 · Conservation and audit, side by side</h2>
+        <p class="hint">
+          <code>GET /conservation</code> reads the O(1) counters; <code>GET /audit</code>
+          independently recomputes the same totals from the account table. They must agree, and
+          <code>discrepancy</code> must be exactly <code>0</code>. This is the project's core
+          invariant and the reason <code>Money</code> is an integer.
+        </p>
+        <div class="row">
+          <button type="button" id="invariant-refresh">Refresh conservation and audit</button>
+        </div>
+        <div class="invariant-grid">
+          <div>
+            <h3>GET /conservation</h3>
+            <dl class="kv" id="conservation-fields"><dt>—</dt><dd>not fetched yet</dd></dl>
+          </div>
+          <div>
+            <h3>GET /audit</h3>
+            <dl class="kv" id="audit-fields"><dt>—</dt><dd>not fetched yet</dd></dl>
+          </div>
+        </div>
+        <p class="verdict" id="invariant-verdict"></p>
+      </section>
+
+      <section class="panel" id="panel-reporting">
+        <h2>6 · Stats and leaderboard</h2>
+        <div class="row">
+          <button type="button" id="stats-refresh">GET /stats</button>
+          <button type="button" id="leaderboard-refresh">GET /leaderboard?limit=10</button>
+        </div>
+        <div class="invariant-grid">
+          <div>
+            <h3>stats</h3>
+            <dl class="kv" id="stats-fields"><dt>—</dt><dd>not fetched yet</dd></dl>
+          </div>
+          <div>
+            <h3>leaderboard</h3>
+            <ol class="leaderboard" id="leaderboard-list"><li>not fetched yet</li></ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-raw">
+        <h2>7 · Raw request log</h2>
+        <p class="hint">
+          Every request this page made, with its method, path, HTTP status and elapsed time.
+          A failure is recorded here with its status code, so no button can be a silent no-op.
+        </p>
+        <div class="row">
+          <button type="button" id="request-log-clear">Clear the log</button>
+        </div>
+        <pre class="log" id="request-log" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Verified locally: this browser client, end to end, by
+        <code>node client/test/e2e.mjs</code>. Not verified here: the Tauri shell in
+        <code>client/src-tauri/</code>, which was never compiled on the authoring machine
+        (see <code>client/README.md</code>).
+      </p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

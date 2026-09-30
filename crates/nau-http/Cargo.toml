@@ -1,0 +1,43 @@
+[package]
+name = "nau-http"
+description = "NewAgentUniverse minimal HTTP/1.1 client: a real TcpStream-backed transport, typed protocol errors, bounded bodies and timeouts. Upstream v2.5.6 shipped no HTTP client at all."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Real TLS for `https://` URLs, driven by `rustls`. Off by default so the crate
+# builds and tests with no C toolchain and no extra dependencies. See the crate
+# docs: the TLS path is implemented but is NOT verified in this checkout.
+tls = ["dep:rustls", "dep:webpki-roots"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+# `net` + `io-util` + `time` are what a real HTTP/1.1 client needs: a TcpStream,
+# AsyncRead/AsyncWrite traits, and I/O timeouts. No runtime is started here.
+tokio = { workspace = true, features = ["net", "io-util", "time"] }
+
+# Optional real-TLS stack. `rustls` is pinned to the pure-Rust `ring` provider
+# and its default features are off, because `aws-lc-rs` (the default provider)
+# needs a C toolchain plus cmake, and this workspace deliberately stays free of
+# C build dependencies.
+rustls = { version = "0.23", optional = true, default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+] }
+webpki-roots = { version = "0.25", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "net", "time"] }

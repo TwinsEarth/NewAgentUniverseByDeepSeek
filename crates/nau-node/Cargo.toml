@@ -1,0 +1,46 @@
+[package]
+name = "nau-node"
+description = "NewAgentUniverse node: composition root, HTTP/JSON API with enforced methods and state preconditions, and the nau / nau-daemon binaries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nau-daemon"
+path = "src/bin/nau-daemon.rs"
+
+[[bin]]
+name = "nau"
+path = "src/bin/nau.rs"
+
+[dependencies]
+nau-core.workspace = true
+nau-ledger.workspace = true
+nau-consensus.workspace = true
+nau-store.workspace = true
+nau-market.workspace = true
+# The Agent Sandbox. Its routes live in `src/api/sandbox_routes.rs`; the crate
+# itself is the enforcement (a capability model where an unenforceable boundary is
+# a typed refusal, a NullExecutor default that executes nothing, per-sandbox locks
+# and a startup sweep for orphaned directories).
+nau-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+nau-core = { workspace = true }

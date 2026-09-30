@@ -1,0 +1,19 @@
+{
+  "version": "1.2.3",
+  "owner": "0x1111111111111111111111111111111111111111",
+  "governanceHolder": "0x2222222222222222222222222222222222222222",
+  "governanceSupply": 1000000000000,
+  "maxAnchorsPerAgent": 256,
+  "maxSettlementVerifiers": 16,
+  "settlementQuorum": 2,
+  "requiredStake": 10000000,
+  "maxReputationVerifiers": 16,
+  "settlementVerifiers": [
+    "0x3333333333333333333333333333333333333333",
+    "0x4444444444444444444444444444444444444444"
+  ],
+  "reputationVerifiers": [
+    "0x3333333333333333333333333333333333333333",
+    "0x4444444444444444444444444444444444444444"
+  ]
+}
