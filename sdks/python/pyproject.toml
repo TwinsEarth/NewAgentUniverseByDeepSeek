@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nau-sdk"
+# NOTE: the version is intentionally NOT restated as a literal here. Upstream
+# v2.5.6 restated its version in four Python files and all four drifted to 2.3.6
+# while the package claimed 2.5.6. At runtime `nau_sdk.version` reads the
+# repository VERSION file. For building a wheel, the attribute below points at
+# that same module, so there is exactly one number in the tree.
+dynamic = ["version"]
+description = "Python SDK for the nau/1 protocol: canonical signing, exact integer money, and the market/MCP clients"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["ed25519", "canonical-json", "agent-marketplace", "mcp", "did"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Security :: Cryptography",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+# HARD REQUIREMENT: zero third-party dependencies. Ed25519 is implemented in pure
+# Python (nau_sdk/_ed25519.py, RFC 8032) and the HTTP clients use urllib, so the
+# conformance suite always runs -- unlike upstream, whose optional `cryptography`
+# import silently skipped 11 of its 17 tests in CI.
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.urls]
+Repository = "https://example.invalid/NewAgentUniverseByDeepSeek"
+Conformance = "https://example.invalid/NewAgentUniverseByDeepSeek/conformance/vectors.json"
+
+[tool.setuptools]
+packages = ["nau_sdk"]
+
+[tool.setuptools.dynamic]
+# Read by setuptools' `attr:` finder, which statically extracts the assignment
+# from the module body -- it does not import the package. The value comes from
+# the module-level `VERSION, VERSION_FILE = _load()` line in version.py, which in
+# turn reads <repo root>/VERSION.
+version = { attr = "nau_sdk.version.VERSION" }
+
+[tool.setuptools.package-data]
+nau_sdk = ["py.typed"]
+
+[tool.unittest]
+start-dir = "tests"

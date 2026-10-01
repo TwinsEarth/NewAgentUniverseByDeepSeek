@@ -1,0 +1,128 @@
+[package]
+name = "nau-plugins"
+description = "NewAgentUniverse V2.2.2 plugin implementations: the in-process T0 system-plugin framework (one door, no registry and no sandbox handle), four real system plugins (identity, storage, policy, orchestrator) that wrap behaviour already verified in this workspace, signed official/certified/third-party manifest fixtures with their refusals, and a process-plugin binary that speaks the host ABI frame on stdin/stdout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_plugins"
+path = "src/lib.rs"
+
+# The process-plugin binary. It exists so `nau_plugin::runtime::ProcessRuntime`
+# has something real to point at: one length-prefixed request in, one
+# length-prefixed response out, then exit. The frame format is documented in the
+# crate docs and implemented in `nau_plugins::frame`, which the binary and the
+# tests share -- so the format the tests exercise is the format the binary speaks,
+# not a second implementation of it.
+[[bin]]
+name = "nau-plugin-echo"
+path = "src/bin/nau-plugin-echo.rs"
+
+# The first *official* plugin that is a real executable rather than a manifest. A process
+# plugin is what `nau_plugin::runtime::ProcessRuntime` starts, and `nau-node`'s
+# `plugin_process` host is what drives it, so this binary is the thing that makes the T1
+# tier's claim executable instead of documented.
+[[bin]]
+name = "nau-plugin-market"
+path = "src/bin/nau-plugin-market.rs"
+
+# The first *certified* (T2) plugin. The tier exists to be certified, and until now nothing
+# was published under a `com.twinsearth.certified.*` name: the review flow could describe a
+# certification and no plugin carried one.
+[[bin]]
+name = "nau-plugin-swarm"
+path = "src/bin/nau-plugin-swarm.rs"
+
+# The first *third-party* (T3) plugin. The tier holds the basic capability set and nothing
+# above it, and it is the tier the registration-and-review flow was built for -- so a
+# plugin published under a third-party name is the object that flow, and the quarantine
+# that can stop it, have never been exercised against.
+[[bin]]
+name = "nau-plugin-reputation"
+path = "src/bin/nau-plugin-reputation.rs"
+
+# Two more official (T1) plugins, delegating to `nau-mcp` and `nau-core` respectively.
+[[bin]]
+name = "nau-plugin-mcp"
+path = "src/bin/nau-plugin-mcp.rs"
+
+[[bin]]
+name = "nau-plugin-scheduler"
+path = "src/bin/nau-plugin-scheduler.rs"
+
+# `official.agent` validates the CURRENT AgentCard from `nau-core`, which is not the same
+# job as `sys.migrate` (a T0 plugin that reads the upstream v2.5.6 legacy card).
+[[bin]]
+name = "nau-plugin-agent"
+path = "src/bin/nau-plugin-agent.rs"
+
+[dependencies]
+# The kernel this crate implements plugins for. `nau-plugin` is listed in
+# `[workspace.dependencies]`, so this crate consumes that line rather than carrying a
+# second copy of the path and version.
+nau-plugin.workspace = true
+# T0 plugins wrap behaviour that already exists in this workspace rather than
+# reimplementing it: identity delegates to `nau_core::identity`, storage to
+# `nau_store::FileStore`.
+nau-core.workspace = true
+nau-store.workspace = true
+# The crates the T0 system plugins delegate to. Each plugin is a thin adapter over
+# functionality that already exists and is already tested; none of them reimplements
+# anything. These belong in `[dependencies]` rather than `[dev-dependencies]`: the plugin
+# sources import them, so the library itself does not build without them — a mistake the
+# first attempt at this wiring made, by matching the `nau-sandbox` anchor in the dev
+# section first.
+nau-net.workspace = true
+nau-erasure.workspace = true
+nau-ledger.workspace = true
+nau-attest.workspace = true
+nau-http.workspace = true
+nau-migrate.workspace = true
+# `nau-plugin-market`, the first official (T1) plugin to be genuinely runnable rather than
+# a manifest: it answers `rank` by delegating to `nau_market::matching::rank_bids` instead
+# of reimplementing bid ordering, which is the whole rule this migration follows.
+nau-market.workspace = true
+# `nau-plugin-swarm`, the first certified (T2) plugin: its `tally` op delegates to the
+# real committee in `nau-consensus` instead of reimplementing quorum arithmetic.
+#
+# Note that `autobins` is on by default, so a new file under `src/bin/` is a discovered
+# target **immediately** -- the `[[bin]]` sections in this manifest document the targets
+# rather than enable them, and a missing dependency breaks `-p nau-plugins` for everyone
+# before anyone notices the binary is new.
+nau-consensus.workspace = true
+# `nau-plugin-mcp`, an official (T1) plugin: it answers `initialize` from `nau-mcp`'s own
+# protocol negotiation and `rpc` from that crate's request parser, rather than restating
+# either. Added before the binary existed, deliberately: `autobins` makes a new file under
+# `src/bin/` a discovered target the moment it is written, so a missing edge here breaks
+# `-p nau-plugins` for everyone the instant the file lands -- and the lockfile rewrite that
+# follows means the next build must run without `--locked`.
+nau-mcp.workspace = true
+# `sys.sandbox` reports what the process backend can and cannot enforce, and pre-checks a
+# spec against it. That is a library concern, not a test concern, so the sandbox crate is
+# a real dependency and not only a dev one — which the first wiring pass got wrong by
+# leaving it in `[dev-dependencies]`, where it had been sufficient until a plugin imported it.
+nau-sandbox.workspace = true
+# `sys.http` drives `nau_http::Transport::execute`, which is `async fn` over a tokio
+# TcpStream, while `SystemPlugin::handle` is synchronous. The plugin therefore owns a
+# current-thread runtime per call. The workspace feature set already includes `rt`.
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `nau-sandbox` used to be listed here, with the note that the library itself never starts
+# a sandbox. That was true until `sys.sandbox` was written: the plugin reports what the
+# backend can enforce, so the crate is now a real dependency (see `[dependencies]`). Cargo
+# accepts the same dependency in both sections, but keeping the stale copy would suggest
+# the library still does not need it.

@@ -1,0 +1,66 @@
+# CodeQL static analysis.
+#
+# WHY THIS FILE LOOKS THE WAY IT DOES
+# -----------------------------------
+# Upstream agent-universe v2.5.6 had no CodeQL configuration at all, and every
+# action it did use was referenced by a floating major tag (`@v4`), so the
+# analysis could change with no diff in this repository. Every action here is
+# pinned to an exact version.
+#
+# The language set matches what is actually published from this tree: Rust
+# binaries, the JavaScript SDK, the Python SDK. `swift` and `c-cpp` are
+# deliberately absent — nothing here is written in them.
+
+name: CodeQL
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Weekly, so a newly published query pack is applied even to a quiet tree.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze / ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      # Required by the analysis upload, and only for this job.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: rust
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@662472033e021d55d94146f66f6058822b0b39fd # v3.27.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # The default query set plus the security-and-quality suite: the
+          # latter is what catches the "correct but unsafe" patterns this code
+          # is most exposed to (unchecked arithmetic on money, panics on
+          # attacker-controlled input, integer casts).
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@662472033e021d55d94146f66f6058822b0b39fd # v3.27.0
+        with:
+          category: "/language:${{ matrix.language }}"

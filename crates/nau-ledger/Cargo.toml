@@ -1,0 +1,24 @@
+[package]
+name = "nau-ledger"
+description = "NewAgentUniverse exact integer double-entry ledger: accounts, escrow, stakes, slashing, and an O(1) conservation check backed by an O(N) audit that can fail. No I/O, no async, no floating point."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+# canonical JSON is the hash input, so it is a real (not dev) dependency.
+serde_json.workspace = true
+# The journal hash chain. `sha2` is a real, stable, collision-resistant hash
+# (unlike the `DefaultHasher`-behind-a-`sha256_hex`-name pattern elsewhere), and
+# `hex` renders the digest in the lowercase-hex form the rest of the workspace
+# already uses, so a digest can travel through JSON without a second encoding.
+sha2.workspace = true
+hex.workspace = true

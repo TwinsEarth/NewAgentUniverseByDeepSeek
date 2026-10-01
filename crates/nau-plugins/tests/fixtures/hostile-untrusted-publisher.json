@@ -1,0 +1,36 @@
+{
+  "plugin": {
+    "name": "io.example.analytics",
+    "version": "1.4.0",
+    "abi": "3.2",
+    "entry": "analytics.bin",
+    "publisher": "did:nau:defe6330f78fcc11",
+    "module_sha256": "28070cc98a113bdd6a9244ec9c97c3d5866a57927b263ea77255b07d6064d8b6"
+  },
+  "capabilities": {
+    "grant": [
+      "plugin:lifecycle:read",
+      "plugin:message:send",
+      "plugin:storage:own"
+    ]
+  },
+  "limits": {
+    "memory_bytes": 268435456,
+    "cpu_ms": 20000,
+    "disk_bytes": 67108864,
+    "max_processes": 4,
+    "max_output_bytes": 262144
+  },
+  "waivers": {
+    "cpu_ms": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "disk_bytes": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "filesystem_confinement": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "max_open_files": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
+  },
+  "signature": {
+    "publisher_key": "91a28a0b74381593a4d9469579208926afc8ad82c8839b7644359b9eba9a4b3a",
+    "manifest_digest": "b1791ea137b25efa9af22ad50ac385b7b65e43a8a67b997d0a244698c790a815",
+    "sig": "5aa499bf86c4a9f688815fcb084d39bbb225c3bc11c4c47d2bebb25e86c62a106e5e968c605896ffb2687c0d10ff04b80b3f328926152e070577813536bdb302"
+  }
+}

@@ -1,0 +1,284 @@
+/*
+ * Styling for the daemon client.
+ *
+ * There is no framework and no build step: one stylesheet, loaded directly. The
+ * class names match the elements `app.js` creates with `createElement`, so the
+ * script never has to build markup to get a colour.
+ */
+
+:root {
+  color-scheme: light dark;
+  --fg: #14181d;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --muted: #5a6572;
+  --line: #d8dde3;
+  --accent: #1f5f8b;
+  --ok: #1c6b3a;
+  --bad: #a4232b;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6e9ee;
+    --bg: #14181d;
+    --panel: #1c2229;
+    --muted: #9aa5b1;
+    --line: #2c343d;
+    --accent: #7fb6dd;
+    --ok: #7ed09a;
+    --bad: #ff8a8a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 0 4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.masthead {
+  padding: 1.5rem clamp(1rem, 4vw, 3rem) 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tagline,
+.hint {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--muted);
+  max-width: 70ch;
+  font-size: 0.9rem;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+
+main {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem clamp(1rem, 4vw, 3rem);
+  max-width: 1200px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+label {
+  min-width: 18ch;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+input[type="text"] {
+  font: inherit;
+  font-family: var(--mono);
+  padding: 0.35rem 0.5rem;
+  min-width: 20ch;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(12ch, max-content) 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+}
+
+.kv dt {
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.daemon-health {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
+.daemon-health dt {
+  color: var(--muted);
+}
+
+.daemon-health dd {
+  margin: 0;
+  font-family: var(--mono);
+}
+
+.log {
+  margin: 0.75rem 0 0;
+  padding: 0.6rem 0.75rem;
+  min-height: 4.5rem;
+  max-height: 22rem;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-line {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.log-ok {
+  color: var(--ok);
+}
+
+.log-info {
+  color: inherit;
+}
+
+.log-error {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.result {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+
+.danger-zone {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px dashed var(--bad);
+  border-radius: 6px;
+}
+
+.invariant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.verdict {
+  margin: 0.75rem 0 0;
+  font-weight: 600;
+}
+
+.verdict-ok {
+  color: var(--ok);
+}
+
+.verdict-bad {
+  color: var(--bad);
+}
+
+.leaderboard {
+  margin: 0;
+  padding-left: 1.4rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+
+.error-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--bad);
+  border-left-width: 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mono {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+footer {
+  padding: 1rem clamp(1rem, 4vw, 3rem);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+  max-width: 90ch;
+}

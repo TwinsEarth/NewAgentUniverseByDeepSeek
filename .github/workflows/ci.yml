@@ -1,0 +1,563 @@
+# Continuous integration for NewAgentUniverseByDeepSeek.
+#
+# WHY THIS FILE LOOKS THE WAY IT DOES
+# -----------------------------------
+# Upstream agent-universe v2.5.6 shipped CI that did not actually gate anything:
+#
+#   * `cargo clippy` ended in `|| echo "tolerated"`, so every lint was advisory
+#     and the job was green regardless of what clippy found.
+#   * the Python suite skipped 11 of its 17 tests because the workflow never
+#     installed `cryptography`; the skips were reported as success.
+#   * Solidity was never compiled. The "contract" check grepped the sources for
+#     the string "pragma solidity", so a file of comments would have passed.
+#   * every action was referenced by a floating major tag (`@v4`), so a breaking
+#     or compromised upstream release could change the build with no diff here.
+#
+# This workflow is genuinely gating: every step below fails the job on a real
+# failure, no step is wrapped in `|| echo`, and every action is pinned to an
+# exact version. If a check is not worth failing the build for, it does not
+# belong here.
+
+name: CI
+
+# A force-push or a rapid series of pushes supersedes the previous run: cancel it.
+# Without this, pushing repeatedly leaves a queue of stale runs, which is noise
+# rather than signal.
+#
+# The group MUST include `github.workflow`, and that is not decoration either.
+# This file is reused through `workflow_call` by `release.yml` and `client.yml`.
+# A reusable workflow's jobs join the CALLER's concurrency group, so with the group
+# keyed on the ref alone, `Client` and `Release` both asked for
+# `ci-refs/tags/v1.1.1` and CANCELLED EACH OTHER: two runs of this file were
+# observed cancelled with every job stopped and the tauri matrix never even
+# expanded. `github.workflow` is the top-level caller's name, so each caller now
+# gets its own group and only superseded runs of the SAME workflow are cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # `workflow_call` is what lets `release.yml` reuse this file instead of
+  # re-implementing (and slowly diverging from) the test steps.
+  workflow_call:
+
+# Least privilege by default. The release workflow that calls this one declares
+# `contents: write` for itself; these jobs never need it.
+permissions:
+  contents: read
+
+# The Rust toolchain is pinned to the project's *minimum* supported version, so
+# the `rust-version` claim in Cargo.toml is verified on every push rather than
+# asserted. A floating `stable` would be a different compiler every few weeks,
+# which is how "works on my machine" becomes "the build broke overnight with no
+# commits".
+#
+# 1.85.0 is the floor because `zeroize 1.9.0` — a transitive dependency of
+# ed25519-dalek — is an edition-2024 crate; cargo before 1.85 cannot parse its
+# manifest at all ("failed to parse manifest ... zeroize-1.9.0/Cargo.toml").
+# Pinning 1.83 made every rust job fail, which is how this was found.
+env:
+  RUST_TOOLCHAIN: "1.85.0"
+  # CARGO_BUILD_JOBS bounds concurrent rustc processes, exactly as
+  # `.cargo/config.toml` documents for local builds. 8 concurrent rustc
+  # processes OOM a 16 GB machine: the upstream build died with
+  # `rustc-LLVM ERROR: out of memory / Allocation failed`. CI runners are
+  # smaller than that, so the bound is lowered to 2 here and cargo's own
+  # default is never allowed to win.
+  CARGO_BUILD_JOBS: "2"
+  # Fail a job that hangs rather than occupying a runner for six hours.
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, pinned
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Assert Cargo.lock is in sync with the manifests
+        # `--locked` below fails *during* the build when the lock file is stale;
+        # this reports the same problem in one second, with a readable message.
+        #
+        # `shell: bash` is load-bearing, not decoration. The default shell on the
+        # Windows runner is PowerShell, where `> /dev/null` is not a null device:
+        # it resolves to `D:\dev\null` and the step dies with
+        # `Could not find a part of the path 'D:\dev\null'` -- a failure whose
+        # message looks exactly like a stale lock file and is nothing of the kind.
+        # Git Bash exists on all three runners, so pinning the shell keeps a single
+        # command valid everywhere instead of branching per OS.
+        shell: bash
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: cargo build --workspace --locked
+        run: cargo build --workspace --locked
+
+      - name: cargo test --workspace --locked
+        run: cargo test --workspace --locked
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        # A REAL gate. No `|| echo "tolerated"`: a warning is a failed job.
+        # `--all-targets` includes tests, benches and examples, which upstream's
+        # clippy invocation skipped.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Deployment smoke test (install, run, restart, state survives)
+        # Runs on all three runners, and that is the point of the step.
+        #
+        # `scripts/verify-all.mjs` has had a deployment gate for a while, but CI never ran
+        # that script -- so the local deployment check was only ever executed on whichever
+        # platform its operator happened to use, which here meant Windows. Three-platform
+        # *build* was verified and three-platform *deployment* was only asserted, and the
+        # difference between those two is what this step removes.
+        #
+        # The script is platform-neutral apart from the `.exe` suffix: it installs the built
+        # binaries to a prefix, starts the real daemon on a free port, restarts it, and
+        # checks that its state survived. No systemd, no launchctl, no service manager.
+        #
+        # A deployment question is not a unit-test question: whether a binary installs,
+        # starts and keeps its state is exactly what a green `cargo test` cannot answer.
+        run: node scripts/deploy-local.mjs --prefix "${{ runner.temp }}/nau-deploy"
+        env:
+          NAU_PROFILE: debug
+
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Prove the Python SDK needs no dependencies
+        # The SDK is dependency-free by design. Upstream's workflow never
+        # installed `cryptography`, so 11 of its 17 tests skipped themselves and
+        # the job still went green. If `site-packages` is ever needed here, the
+        # "dependency-free" claim in sdks/python/README.md is false and this
+        # step is the place that says so.
+        run: |
+          python -c "import sys; print(sys.version)"
+          python - <<'PY'
+          import importlib.util
+          for forbidden in ("cryptography", "nacl", "ed25519"):
+              if importlib.util.find_spec(forbidden) is not None:
+                  raise SystemExit(
+                      f"{forbidden} is importable in CI; the SDK must not depend on it"
+                  )
+          print("no third-party crypto package is present")
+          PY
+
+      - name: Assert the SDK's runner exists
+        # This job is a gate, so a missing runner is a failure, not a skip. The
+        # message says exactly what is wrong so it cannot be mistaken for a
+        # toolchain problem. (Upstream's Python job never installed
+        # `cryptography`, so 11 of its 17 tests skipped and the job still passed;
+        # a silent skip is the failure mode this step exists to prevent.)
+        run: |
+          set -eu
+          if [ ! -f sdks/python/run_tests.py ]; then
+            echo "::error::sdks/python/run_tests.py does not exist; the Python SDK is part of this release and must be present"
+            exit 1
+          fi
+          ls -la sdks/python
+
+      - name: Run the SDK's own test runner
+        # No `pip install`, and no `|| true`: the runner's exit code is the gate.
+        # A skip-only run must not be able to masquerade as a pass — the SDK's
+        # runner exits non-zero when a test cannot run.
+        run: python sdks/python/run_tests.py
+
+  js:
+    name: javascript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: "22"
+
+      - name: Run the JS SDK test suite
+        # As with the Python job, a missing runner is a failure rather than a
+        # skip, and the message says why.
+        run: |
+          set -eu
+          if [ ! -f sdks/js/test/run.js ]; then
+            echo "::error::sdks/js/test/run.js does not exist; the JS SDK is part of this release and must be present"
+            exit 1
+          fi
+          node sdks/js/test/run.js
+
+      # The client's own end-to-end test runs here, in the normal matrix, so a
+      # regression in the GUI fails the build rather than a release. It starts a
+      # real `nau-daemon --ephemeral` on a free port, serves the client through
+      # `client/serve.mjs` and drives the full market over HTTP — which is why
+      # this job installs Rust below. `.github/workflows/client.yml` reuses this
+      # file through `workflow_call`, so the Tauri bundle cannot be built on a
+      # tree whose client test is red.
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }} for the client e2e test
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, pinned
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo registry and target for the client e2e test
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Run the client end-to-end test against a real daemon
+        run: node client/test/e2e.mjs
+
+  conformance:
+    name: conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The diff check below needs to see changes to the working tree.
+          fetch-depth: 1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: "22"
+
+      - name: Regenerate the conformance vectors
+        run: |
+          set -eu
+          if [ ! -f conformance/generate.mjs ]; then
+            echo "::error::conformance/generate.mjs does not exist; the cross-language fixture cannot be reproduced"
+            exit 1
+          fi
+          node conformance/generate.mjs
+
+      - name: Assert the checked-in vectors are reproducible from the generator
+        # THIS is the cross-language guarantee upstream never had. The generator
+        # shares no code with the Rust implementation and uses Node's own
+        # OpenSSL Ed25519 + an independent canonicalizer, so if the checked-in
+        # fixture still matches after regeneration, the canonical rules in
+        # conformance/vectors.json are reproducible by a second implementation.
+        # A float, a key-order change or a nesting-limit drift shows up here as a
+        # diff rather than as a signature that mysteriously fails to verify.
+        run: |
+          git add -N conformance/vectors.json
+          git diff --exit-code -- conformance/vectors.json
+
+  contracts:
+    name: contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@de808b1eea699e761c404bda44ba8f21aba30b2c # v1.3.1
+        with:
+          version: v1.3.4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Static contract and workflow checks
+        # Structural checks only: balanced delimiters, a `returns` for every
+        # declared return value, `// upstream v2.5.6 fix:` markers present for
+        # every documented defect, the required test names present, and every
+        # workflow YAML-parseable with every action pinned to a commit SHA.
+        # This is NOT a substitute for `forge build` — it runs before and
+        # alongside it, and it needs no toolchain.
+        run: |
+          set -eu
+          python contracts/verify_static.py
+          python contracts/verify_api.py
+
+      - name: Show the toolchain that is about to build
+        run: forge --version
+
+      - name: Fetch forge-std at a pinned tag
+        # A pinned `git clone` rather than `forge install`: that command's flags
+        # changed between Foundry releases (`--no-commit` is now rejected with
+        # "unexpected argument"), and a CI step whose validity depends on the
+        # installed CLI version is a step that breaks on someone else's release
+        # schedule. `contracts/foundry.toml` remaps `forge-std/=lib/forge-std/src/`,
+        # so `lib/forge-std` is the correct clone target.
+        run: |
+          set -eu
+          git clone --depth 1 --branch v1.9.4 \
+            https://github.com/foundry-rs/forge-std.git lib/forge-std
+          test -f lib/forge-std/src/Test.sol || {
+            echo "::error::forge-std did not unpack as expected"
+            exit 1
+          }
+          echo "forge-std v1.9.4 in place"
+
+      # NOTE ON `forge fmt`
+      # ------------------
+      # There is deliberately no `forge fmt --check` step here, and it is a
+      # decision rather than an omission.
+      #
+      # `forge fmt` output is defined by the formatter build, and these sources
+      # were written in an environment with no Foundry available at all (the
+      # 105 MB Windows toolchain download failed repeatedly), so their formatting
+      # could not be canonicalised. A hard fmt gate would therefore block the two
+      # checks that actually matter — `forge build` and `forge test` — behind a
+      # whitespace diff nobody could reproduce locally, which is the failure mode
+      # this file's header warns about ("if a check is not worth failing the build
+      # for, it does not belong here").
+      #
+      # To adopt canonical formatting, run `forge fmt` with Foundry installed and
+      # commit the result. Once the tree is formatted, a
+      # `run: forge fmt --check` step can be added here as a normal hard gate.
+      #
+      # What is NOT acceptable is the upstream approach: claiming a contract check
+      # while only grepping the sources for the string "pragma solidity".
+
+      - name: forge build --sizes
+        # Compiling is the check. Upstream grepped for the string "pragma
+        # solidity", which a file of comments satisfies.
+        run: forge build --sizes
+
+      - name: forge test -vvv
+        # --no-match-path matters: without it forge also runs the dependency's
+        # dependency's own suites (forge-std's StdAssertions/StdError/StdChains
+        # tests), which assert against live Alchemy RPC URLs and environment
+        # variables. 19 of the 26 failures in the first real run were forge-std
+        # failing its own tests, which says nothing about this project.
+        run: forge test -vvv --no-match-path '*lib/forge-std*'
+
+      - name: Assert contracts/VERSION mirrors the repository VERSION
+        # The contracts must not carry an independently drifting version. This is
+        # the same single-source-of-truth rule as `[workspace.package] version`
+        # and the SDKs; `script/Deploy.s.sol` reads contracts/VERSION at run time
+        # and refuses to deploy when the deploy config disagrees with it.
+        run: |
+          set -eu
+          test -f contracts/VERSION
+          diff -u VERSION contracts/VERSION
+          echo "contracts/VERSION matches VERSION"
+
+      - name: Assert the deploy script actually reads VERSION
+        # A behavioural check on the sources: the deploy script must read the
+        # VERSION file rather than restating the number. If somebody replaces the
+        # read with a literal, this fails.
+        run: |
+          set -eu
+          grep -qF 'readAndTrim("VERSION")' contracts/script/Deploy.s.sol
+          grep -q 'VersionMismatch' contracts/script/Deploy.s.sol
+          echo "Deploy.s.sol reads VERSION and refuses to deploy on a mismatch"
+
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: VERSION agrees with [workspace.package] version
+        run: |
+          set -eu
+          version="$(tr -d '[:space:]' < VERSION)"
+          test -n "$version" || { echo "VERSION is empty"; exit 1; }
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/p' Cargo.toml \
+            | sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' | head -n1)"
+          echo "VERSION=$version  [workspace.package] version=$cargo_version"
+          test "$version" = "$cargo_version" || {
+            echo "::error::VERSION ($version) != [workspace.package] version ($cargo_version)"
+            exit 1
+          }
+          for manifest in crates/*/Cargo.toml; do
+            if grep -q '^\[package\]' "$manifest"; then
+              declared="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$manifest" | head -n1)"
+              if [ -n "$declared" ] && [ "$declared" != "$version" ]; then
+                echo "::error::$manifest declares $declared, expected $version"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: SDK version declarations agree with VERSION
+        # The rule is "one source of truth". Whether that means "declare it and
+        # assert equality" or "never declare it at all" depends on the ecosystem:
+        #
+        #   * PEP 621 can DERIVE the version (`attr = nau_sdk.version.VERSION`), so
+        #     the Python manifest must not declare one.
+        #   * npm needs the number at publish time, and this SDK keeps it out of
+        #     package.json so it cannot drift; the publish step must therefore
+        #     inject it (`npm pkg set version="$(tr -d '[:space:]' < VERSION)"`).
+        #
+        # `tests/` are excluded deliberately: a stub server response and a regex
+        # sanity check legitimately contain version-shaped strings, and a check
+        # that fails on test fixtures trains people to ignore it.
+        run: |
+          set -eu
+          version="$(tr -d '[:space:]' < VERSION)"
+          pattern="$(printf '%s' "$version" | sed 's/\./\\./g')"
+
+          # 1) The npm manifest must NOT restate the version.
+          js_manifest="sdks/js/package.json"
+          if [ -f "$js_manifest" ] && grep -q '"version"' "$js_manifest"; then
+            echo "::error::$js_manifest declares a version; keep it only in VERSION and inject it at publish time"
+            exit 1
+          fi
+
+          # 2) The Python package must DERIVE its version, not declare one.
+          if grep -qE '^version[[:space:]]*=[[:space:]]*"' sdks/python/pyproject.toml 2>/dev/null; then
+            echo "::error::sdks/python/pyproject.toml declares a literal version; use attr = nau_sdk.version.VERSION"
+            exit 1
+          fi
+
+          # 3) Shipping source reads VERSION; it never restates it.
+          status=0
+          for dir in sdks/python/nau_sdk sdks/js/lib; do
+            [ -d "$dir" ] || continue
+            if grep -rn --include='*.py' --include='*.js' --include='*.mjs' \
+                 -E "\"$pattern\"|'$pattern'" "$dir"; then
+              echo "::error::$dir restates the version $version; read VERSION instead"
+              status=1
+            fi
+          done
+          for f in sdks/js/index.js sdks/js/index.d.ts; do
+            [ -f "$f" ] || continue
+            if grep -nE "\"$pattern\"|'$pattern'" "$f"; then
+              echo "::error::$f restates the version $version; read VERSION instead"
+              status=1
+            fi
+          done
+          [ "$status" -eq 0 ] || exit 1
+          echo "VERSION is the only place the version is written down"
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: ShellCheck every shell script
+        # `shellcheck` is preinstalled on ubuntu-latest. Upstream ran no shell
+        # linting at all, so a broken release script was only discovered when a
+        # tag was already pushed.
+        run: |
+          set -eu
+          mapfile -t scripts < <(git ls-files '*.sh' '*.bash')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "no shell scripts tracked; nothing to lint"
+            exit 0
+          fi
+          printf 'linting %s\n' "${scripts[@]}"
+          shellcheck --version
+          shellcheck --severity=warning "${scripts[@]}"
+
+  # `nau-libp2p`'s real libp2p stack, built and tested in its own job because the
+  # `libp2p` feature is OFF by default. The `rust` job above stays light on purpose:
+  # its three-OS matrix never compiles libp2p, so a libp2p build failure cannot make
+  # the portable half of the workspace look broken, and the portable half cannot
+  # hide a libp2p regression. `nau-libp2p`'s own integration tests are real two- and
+  # three-node swarms on loopback, so this job needs no network access beyond the
+  # crates.io fetch that every Rust job does.
+  #
+  # WHY THIS JOB IS SKIPPED FOR `workflow_call`, AND WHY THAT IS NOT A LOOPHOLE
+  # --------------------------------------------------------------------------
+  # `release.yml` reuses this file via `workflow_call`, so *every* job here gates a
+  # release unless it says otherwise. This job deliberately opts out with an `if:`
+  # on the event name, because the brief it implements requires the libp2p stack not
+  # to block releases while `release.yml` is left alone. The gate it gives up is
+  # small and bounded: this job runs on every push and every pull request, so a
+  # libp2p regression fails CI before it can be merged or tagged, and the tag is
+  # taken from a commit whose push already ran it. A skipped job counts as a success
+  # for `needs:`, so the release chain is unaffected either way.
+  libp2p:
+    name: libp2p
+    # Not on `workflow_call`: see the note above. `github.event_name` is
+    # `workflow_call` when release.yml reuses this file.
+    if: github.event_name != 'workflow_call'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, pinned
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-libp2p-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-libp2p-${{ env.RUST_TOOLCHAIN }}-
+            ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Assert Cargo.lock is in sync with the manifests
+        # The pins that make this dependency tree build on 1.85 live in the lock
+        # file, so a stale lock is a build failure. This reports it in a second,
+        # with a readable message, instead of failing deep inside `--locked`.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: cargo build -p nau-libp2p --features libp2p --locked
+        run: cargo build -p nau-libp2p --features libp2p --locked
+
+      - name: cargo test -p nau-libp2p --features libp2p
+        # Deliberately without `--locked`: the build step above already proved the
+        # lock resolves, and this step's job is to run the tests. The libp2p
+        # integration tests start real swarms on loopback, so they run
+        # single-threaded to keep the timing-dependent waits from competing for
+        # cores with each other.
+        run: cargo test -p nau-libp2p --features libp2p -- --test-threads=1
+
+      - name: cargo test -p nau-libp2p (no features)
+        # The other half of the crate: the identity mapping, naming rules, codec and
+        # configuration validation, none of which needs libp2p. This is what proves
+        # the feature really is optional rather than merely labelled so.
+        run: cargo test -p nau-libp2p

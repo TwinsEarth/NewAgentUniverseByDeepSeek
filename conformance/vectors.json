@@ -1,0 +1,138 @@
+{
+  "protocol": "nau/1",
+  "generated_by": "node:crypto (OpenSSL) Ed25519 + this file's independent canonicalizer. No code is shared with the Rust implementation.",
+  "canonicalization_rules": [
+    "The value must be a JSON object at the root.",
+    "Every object key named \"signature\" is dropped, at every depth.",
+    "Object keys are emitted in ascending Unicode CODE POINT order.",
+    "No whitespace: separators are exactly \",\" and \":\".",
+    "Strings are raw UTF-8; only \" \\ and the short control escapes are escaped; other control characters use lowercase \\u00xx.",
+    "Numbers must be integers fitting i64 or u64. Floats, exponent notation and out-of-range values are rejected.",
+    "Nesting is bounded to 64 levels."
+  ],
+  "seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "identity": {
+    "public_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+    "did_nau": "did:nau:34750f98bd59fcfc",
+    "did_legacy": "did:aip:34750f98bd59fcfc",
+    "note": "did = \"did:nau:\" + first 8 bytes of SHA-256(raw 32-byte public key), lowercase hex."
+  },
+  "payloads": [
+    {
+      "id": "upstream-v2.5.6-compat",
+      "note": "Byte-identical to the vector asserted by upstream gsn-core/tests/cross_lang_signature.rs, proving identities and signatures minted by agent-universe v2.5.6 remain verifiable.",
+      "input_json": "{\"did\":\"did:aip:34750f98bd59fcfc\",\"name\":\"CrossLang\",\"capabilities\":[\"text-generation\",\"mcp\"],\"stake\":100,\"signature\":\"\"}",
+      "canonical": "{\"capabilities\":[\"text-generation\",\"mcp\"],\"did\":\"did:aip:34750f98bd59fcfc\",\"name\":\"CrossLang\",\"stake\":100}",
+      "signature_hex": "e14d3f9e8204ea185ea4ba32a8117f262095ab9dac1352e1a7964ce36d3355c288dd6804ffa7daeb5f6eba9f30428f52702a75fd3efbb6a62555a7f24665da0e",
+      "canonical_hex": "7b226361706162696c6974696573223a5b22746578742d67656e65726174696f6e222c226d6370225d2c22646964223a226469643a6169703a33343735306639386264353966636663222c226e616d65223a2243726f73734c616e67222c227374616b65223a3130307d"
+    },
+    {
+      "id": "basic-card",
+      "note": "A normal agent card: key order in the input is deliberately scrambled.",
+      "input_json": "{\"stake\":100,\"name\":\"CrossLang\",\"did\":\"did:nau:34750f98bd59fcfc\",\"capabilities\":[\"text-generation\",\"mcp\"],\"signature\":\"\"}",
+      "canonical": "{\"capabilities\":[\"text-generation\",\"mcp\"],\"did\":\"did:nau:34750f98bd59fcfc\",\"name\":\"CrossLang\",\"stake\":100}",
+      "signature_hex": "659ced46d13522ad4efec0a081362db5fcc47bf6d95752b94f9e0965abc0215e6828800f1a2b26aed8b237e1fa98a39ab1ef52a01753b535d56a822dc85b270f",
+      "canonical_hex": "7b226361706162696c6974696573223a5b22746578742d67656e65726174696f6e222c226d6370225d2c22646964223a226469643a6e61753a33343735306639386264353966636663222c226e616d65223a2243726f73734c616e67222c227374616b65223a3130307d"
+    },
+    {
+      "id": "nested-signature-stripped-at-depth",
+      "note": "Every key named \"signature\" is removed at EVERY depth, not just the top level. Upstream removed only the root key, so a nested signed structure would have had its inner signature covered by the outer signature.",
+      "input_json": "{\"outer\":1,\"signature\":\"deadbeef\",\"nested\":{\"inner\":true,\"signature\":\"cafe\"},\"list\":[{\"signature\":\"x\",\"kept\":1}]}",
+      "canonical": "{\"list\":[{\"kept\":1}],\"nested\":{\"inner\":true},\"outer\":1}",
+      "signature_hex": "500ed7390ec74146b0e3ead4c991ffbf22b8806ae30cae3a5cb82a22d96ce4f831790a67974ca09af421f5d0bc1f2b4b304a4b8c22b6ff7af69b8c9194616006",
+      "canonical_hex": "7b226c697374223a5b7b226b657074223a317d5d2c226e6573746564223a7b22696e6e6572223a747275657d2c226f75746572223a317d"
+    },
+    {
+      "id": "non-ascii-left-raw",
+      "note": "Non-ASCII must be emitted as raw UTF-8, never \\u-escaped.",
+      "input_json": "{\"zh\":\"智能体宇宙\",\"mixed\":\"a中b\",\"signature\":\"\"}",
+      "canonical": "{\"mixed\":\"a中b\",\"zh\":\"智能体宇宙\"}",
+      "signature_hex": "39aefa4576c0390d77762c5e5fd8436fd603c3b28f47a75a9b39bb4bd8e75a984d9432388653029f8727dbaef99a52f3b62e023b377e3207a222f7ec38423d03",
+      "canonical_hex": "7b226d69786564223a2261e4b8ad62222c227a68223a22e699bae883bde4bd93e5ae87e5ae99227d"
+    },
+    {
+      "id": "control-characters-escaped-minimally",
+      "note": "Only \", \\ and the seven short control escapes are escaped; other control characters use lowercase \\u00xx. Nothing else is escaped.",
+      "input_json": "{\"s\":\"a\\\"b\\\\c\\nd\\te\\u0001f\\u001f\",\"signature\":\"\"}",
+      "canonical": "{\"s\":\"a\\\"b\\\\c\\nd\\te\\u0001f\\u001f\"}",
+      "signature_hex": "6c4df2282d95ebf3a967015c464a3afc81a5f9c202a53ea7096d51bc8c437af14247aa1219bd76514324e37831cf249c9a2498f93e61b2d387848a5e7f3d6406",
+      "canonical_hex": "7b2273223a22615c22625c5c635c6e645c74655c7530303031665c7530303166227d"
+    },
+    {
+      "id": "astral-plane-key-ordering",
+      "note": "Keys are ordered by Unicode code point. JavaScript must NOT use the default Array.prototype.sort(), which compares UTF-16 code units and orders U+10000 before U+E000.",
+      "input_json": "{\"\\ud83d\\ude00\":\"astral\",\"\\ue000\":\"bmp-private-use\",\"a\":\"ascii\",\"signature\":\"\"}",
+      "canonical": "{\"a\":\"ascii\",\"\":\"bmp-private-use\",\"😀\":\"astral\"}",
+      "signature_hex": "0bb311c18bf6854293cd7655d10abca75956cc5cb79b9d8c5859c207dd9c654eed8e8c52f50a2f08f8f52eba6f99c8913b8fb0d7ebfa12bbf030e1cd2d4bf407",
+      "canonical_hex": "7b2261223a226173636969222c22ee8080223a22626d702d707269766174652d757365222c22f09f9880223a2261737472616c227d"
+    },
+    {
+      "id": "integers-typed-and-null-and-empty",
+      "note": "null values, an empty array, an empty object and negative integers are all legal.",
+      "input_json": "{\"z\":null,\"arr\":[],\"obj\":{},\"neg\":-42,\"zero\":0,\"signature\":\"\"}",
+      "canonical": "{\"arr\":[],\"neg\":-42,\"obj\":{},\"z\":null,\"zero\":0}",
+      "signature_hex": "aa840b241d145c79d08bb907fa245af549105064a8346a37094a94d91460a5b36bcfdae15d575ed6bde831872c406dff08d01e70f00cd2619535a3a231310703",
+      "canonical_hex": "7b22617272223a5b5d2c226e6567223a2d34322c226f626a223a7b7d2c227a223a6e756c6c2c227a65726f223a307d"
+    },
+    {
+      "id": "js-safe-integer-boundary",
+      "note": "The largest integer every language can represent exactly in one pass: 2^53 - 1.",
+      "input_json": "{\"n\":9007199254740991,\"signature\":\"\"}",
+      "canonical": "{\"n\":9007199254740991}",
+      "signature_hex": "e66d66ed133f637ec3dcb7a3558d0e240bd826d723d43edb80bba0f479c6583796390861bd25183f65f344bb28305c7a325fdec0d39c5bc7b815d6c02128440b",
+      "canonical_hex": "7b226e223a393030373139393235343734303939317d"
+    },
+    {
+      "id": "int64-max",
+      "note": "2^63 - 1 does not survive JavaScript JSON.parse (it becomes 9223372036854776000), so the JS SDK must pass it as a string or refuse it. Recorded here to pin the documented portability boundary.",
+      "input_json": "{\"n\":9223372036854775807,\"signature\":\"\"}",
+      "canonical": "{\"n\":9223372036854775807}",
+      "languages": {
+        "javascript": "unsupported-by-json-parse"
+      },
+      "signature_hex": "459292453b257d50e2c91a0316b99d812c73bfa6969ab8f4bd6c2d487e379306d9b5178a074b75e82eebe731a2493519a735b151297e191075698d08077ff508",
+      "canonical_hex": "7b226e223a393232333337323033363835343737353830377d"
+    },
+    {
+      "id": "uint64-max",
+      "note": "2^64 - 1: exact in Rust and Python, unrepresentable in JS.",
+      "input_json": "{\"n\":18446744073709551615,\"signature\":\"\"}",
+      "canonical": "{\"n\":18446744073709551615}",
+      "languages": {
+        "javascript": "unsupported-by-json-parse"
+      },
+      "signature_hex": "1ac82b25c992cb4993fa46c061675c3447d0ef8fc4aff3e2054ee5332b40ab2bf3adc9ec0cd6bb5901379a00a9edb5cc548766eceb12794ba703d2a0caf11a00",
+      "canonical_hex": "7b226e223a31383434363734343037333730393535313631357d"
+    }
+  ],
+  "rejections": [
+    {
+      "id": "float-value",
+      "note": "Floats are refused outright. This is the single most important cross-language fix: 100 vs 100.0 vs 1e2 format differently in Rust, Python and JavaScript, so a signed payload containing a float cannot be reproduced byte-for-byte. Money therefore travels as integer minor units.",
+      "input_json": "{\"amount\":100.0}",
+      "error": "non_integer_number"
+    },
+    {
+      "id": "fractional-value",
+      "input_json": "{\"amount\":1.5}",
+      "error": "non_integer_number"
+    },
+    {
+      "id": "exponent-notation",
+      "note": "serde_json parses 1e2 as a float, so it is refused as well.",
+      "input_json": "{\"amount\":1e2}",
+      "error": "non_integer_number"
+    },
+    {
+      "id": "root-is-array",
+      "note": "A signing payload must be a JSON object at the root.",
+      "input_json": "[1,2,3]",
+      "error": "root_not_object"
+    },
+    {
+      "id": "root-is-string",
+      "input_json": "\"hello\"",
+      "error": "root_not_object"
+    }
+  ]
+}
