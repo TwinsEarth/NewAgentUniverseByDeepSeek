@@ -1,0 +1,37 @@
+{
+  "plugin": {
+    "name": "io.example.analytics",
+    "version": "1.4.0",
+    "abi": "2.2",
+    "entry": "analytics.bin",
+    "publisher": "did:nau:7599776c3085e3f9",
+    "module_sha256": "28070cc98a113bdd6a9244ec9c97c3d5866a57927b263ea77255b07d6064d8b6"
+  },
+  "capabilities": {
+    "grant": [
+      "plugin:lifecycle:read",
+      "plugin:message:send",
+      "plugin:storage:own",
+      "net:dht:read"
+    ]
+  },
+  "limits": {
+    "memory_bytes": 268435456,
+    "cpu_ms": 20000,
+    "disk_bytes": 67108864,
+    "max_processes": 4,
+    "max_output_bytes": 262144
+  },
+  "waivers": {
+    "cpu_ms": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "disk_bytes": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "filesystem_confinement": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "max_open_files": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
+  },
+  "signature": {
+    "publisher_key": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+    "manifest_digest": "029b693185d0f95ad1f4a4e41176be6f2755e43d430948a1c12d5c421ff55f45",
+    "sig": "09e3b0cc42a61058bb3588f269bfb387f71bdce20da281b72dcd68f0282c747a395ee64d3e95262862798c8630902e44f15cd67e7f7174dbc1db5b68c370580f"
+  }
+}

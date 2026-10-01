@@ -1,0 +1,34 @@
+[package]
+name = "nau-plugin"
+description = "NewAgentUniverse V2.2.2 plugin kernel: a five-level trust classification derived from the manifest name alone, a capability-token model where an ungranted call is refused at the bus, a signed manifest whose digest covers the module, a plugin bus that is the only channel between plugins and host, and a runtime port that refuses any isolation level this build cannot enforce."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_plugin"
+path = "src/lib.rs"
+
+[dependencies]
+# The workspace error taxonomy is `#[non_exhaustive]`, so the kernel keeps its own
+# error type and converts at its own boundary, exactly as `nau-sandbox` does.
+nau-core.workspace = true
+# T1/T2/T3 plugins run in an OS process whose limits are enforced by the sandbox
+# crate's Job Object backend. Reusing it is the point: the isolation the kernel
+# claims for untrusted plugins is the isolation that already has tests.
+nau-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# `ed25519-dalek` is used by the manifest and blacklist verification paths and by
+# the certification fixtures.
+ed25519-dalek.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

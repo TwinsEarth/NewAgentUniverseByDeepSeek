@@ -1,0 +1,36 @@
+{
+  "plugin": {
+    "name": "com.twinsearth.official.market",
+    "version": "1.4.0",
+    "abi": "2.2",
+    "entry": "market.bin",
+    "publisher": "did:nau:fe812c12f3ab4ce6",
+    "module_sha256": "568075ba20b40d5bb6bc7e8c67d1723870e2dda4315146e15add5c8183a1acf3"
+  },
+  "capabilities": {
+    "grant": [
+      "plugin:lifecycle:read",
+      "plugin:message:send",
+      "plugin:storage:own"
+    ]
+  },
+  "limits": {
+    "memory_bytes": 268435456,
+    "cpu_ms": 20000,
+    "disk_bytes": 67108864,
+    "max_processes": 4,
+    "max_output_bytes": 262144
+  },
+  "waivers": {
+    "cpu_ms": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "disk_bytes": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "filesystem_confinement": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "max_open_files": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
+  },
+  "signature": {
+    "publisher_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "manifest_digest": "f5a5ef8eaf13f2c204cbdc25194f9bc4e3dccd6b09ae531d374a426567feb131",
+    "sig": "2a4bd0e57dd3e34a17f18594486bf6aca217f74f369b972f25abdd77129b2a564acbff5a38045651168eba441adef9649414a1172aab1dc171a3be158a621d0a"
+  }
+}

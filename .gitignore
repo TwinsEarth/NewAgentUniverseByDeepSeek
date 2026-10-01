@@ -1,0 +1,67 @@
+# Rust
+/target/
+**/target/
+*.rs.bk
+*.pdb
+
+# Node / JS SDK
+node_modules/
+**/node_modules/
+npm-debug.log*
+*.tgz
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+
+# Local runtime state produced by the daemon
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+/nau-data/
+**/nau-data/
+*.jsonl
+*.snapshot
+
+# Secrets — never commit credentials
+.env
+.env.*
+*.pem
+*.key
+!_test_keys/**
+secrets/
+secrets.json
+
+# Client / packaging build artifacts
+client/dist/
+desktop/dist/
+client/src-tauri/target/
+desktop/src-tauri/target/
+*.dmg
+*.msi
+*.AppImage
+*.deb
+*.apk
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Coverage
+/coverage/
+*.lcov
+cobertura.xml
+
+# Foundry dependency, fetched by CI (never committed; see .github/workflows/ci.yml)
+contracts/lib/
+contracts/cache/
+contracts/out/

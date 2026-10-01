@@ -1,0 +1,37 @@
+[package]
+name = "nau-client"
+version = "1.1.1"
+description = "NewAgentUniverse desktop client — a thin Tauri 2 shell over the nau-daemon HTTP API"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+# This crate is intentionally NOT a member of the repository workspace, so
+# `cargo build --workspace` at the root never pulls in the Tauri dependency tree
+# (which is what makes a low-memory machine fail with
+# `rustc-LLVM ERROR: out of memory / Allocation failed`). Build it explicitly:
+#
+#     cd client/src-tauri && cargo build
+#
+# `Cargo.lock` IS committed. It was produced by `cargo metadata` alone — which
+# resolves the graph but compiles nothing — so `.github/workflows/client.yml` can
+# run `cargo build --locked` on a tag without the resolution drifting.
+[workspace]
+
+[lib]
+name = "nau_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The Rust side of this shell performs the HTTP calls itself, so the daemon's
+# answers are real. Only `default-features = false` is avoided: the CSP, the
+# asset protocol and the (transitive) HTTP stack all come from the default set.
+tauri = { version = "2", features = [] }
+tauri-plugin-http = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+url = "2"

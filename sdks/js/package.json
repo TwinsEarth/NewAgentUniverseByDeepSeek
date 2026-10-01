@@ -1,0 +1,34 @@
+{
+  "name": "@nau/sdk",
+  "description": "JavaScript SDK for the agent universe protocol nau/1: canonical JSON, Ed25519 identity, market and MCP clients. Zero dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./lib/*": "./lib/*"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "keywords": [
+    "nau",
+    "agent-universe",
+    "ed25519",
+    "canonical-json",
+    "mcp"
+  ]
+}

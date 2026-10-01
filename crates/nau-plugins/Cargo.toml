@@ -1,0 +1,51 @@
+[package]
+name = "nau-plugins"
+description = "NewAgentUniverse V2.2.2 plugin implementations: the in-process T0 system-plugin framework (one door, no registry and no sandbox handle), four real system plugins (identity, storage, policy, orchestrator) that wrap behaviour already verified in this workspace, signed official/certified/third-party manifest fixtures with their refusals, and a process-plugin binary that speaks the host ABI frame on stdin/stdout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_plugins"
+path = "src/lib.rs"
+
+# The process-plugin binary. It exists so `nau_plugin::runtime::ProcessRuntime`
+# has something real to point at: one length-prefixed request in, one
+# length-prefixed response out, then exit. The frame format is documented in the
+# crate docs and implemented in `nau_plugins::frame`, which the binary and the
+# tests share -- so the format the tests exercise is the format the binary speaks,
+# not a second implementation of it.
+[[bin]]
+name = "nau-plugin-echo"
+path = "src/bin/nau-plugin-echo.rs"
+
+[dependencies]
+# The kernel this crate implements plugins for. `nau-plugin` is listed in
+# `[workspace.dependencies]`, so this crate consumes that line rather than carrying a
+# second copy of the path and version.
+nau-plugin.workspace = true
+# T0 plugins wrap behaviour that already exists in this workspace rather than
+# reimplementing it: identity delegates to `nau_core::identity`, storage to
+# `nau_store::FileStore`.
+nau-core.workspace = true
+nau-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `tests/process_plugin.rs` runs the process plugin inside the *real* sandbox backend,
+# so the end-to-end claim ("a plugin in a real sandboxed process") is executed rather
+# than asserted. It is a dev-dependency because the library itself never starts a
+# sandbox: that is the host's job, and `nau_plugin::runtime::ProcessRuntime` owns the
+# port the host drives it through.
+nau-sandbox.workspace = true

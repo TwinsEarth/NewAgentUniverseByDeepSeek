@@ -1,0 +1,29 @@
+[package]
+name = "nau-sandbox"
+description = "NewAgentUniverse agent sandbox: a NullExecutor default that executes nothing, a capability model that refuses any policy a backend cannot enforce, and a real process backend whose claims are enforced by a Windows Job Object (process-tree kill, memory and process-count limits, bounded output, env allowlist) or, unverified on this machine, by Unix setrlimit + setsid."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_sandbox"
+path = "src/lib.rs"
+
+[dependencies]
+# The workspace error taxonomy. Adding a variant to it is impossible from here
+# (`#[non_exhaustive]`), so the sandbox keeps its own error type and converts at
+# its own boundary. See `src/error.rs`.
+nau-core.workspace = true
+# `SandboxId` is a v4 UUID: the upstream id was a per-process counter (`sb-N`),
+# which made every id guessable and, because directories lived in the persistent
+# data dir, made a restarted daemon reissue `sb-1` *and inherit its files*.
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

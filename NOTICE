@@ -1,0 +1,65 @@
+NOTICE
+======
+
+NewAgentUniverseByDeepSeek V1.0.1
+
+This product is a clean-room rewrite whose domain model, protocol design and
+terminology derive from the following open-source project:
+
+  Agent Universe (智能体宇宙)
+  https://github.com/TwinsEarth/agent-universe
+  Version audited: v2.5.6 (Rust crate `gsn-core` 0.2.56)
+  Copyright (c) 2026 Agent Universe Contributors
+  Licensed under the MIT License
+
+The upstream MIT copyright notice is reproduced in full in the LICENSE file
+and above in this NOTICE, as the MIT License requires.
+
+WHAT WAS DERIVED
+
+The upstream project's *design* is the starting point of this work, and the
+following are deliberately preserved (each is marked in the source with an
+`upstream v2.5.6` comment):
+
+  * the `did = sha256(raw 32-byte Ed25519 public key)[..8]` identity
+    construction (this rewrite mints `did:nau:` and also ACCEPTS the upstream
+    `did:aip:` prefix, so upstream identities remain verifiable);
+  * the canonical-payload semantics: drop `signature`, compact separators,
+    lexicographic key order, non-ASCII left raw;
+  * the settlement conservation invariant
+    `balance_sum = total_deposited - total_slashed` with an O(1) incremental
+    check plus an independent O(N) audit;
+  * BFT-lite's parameters and rules: `n >= 3f+1`, quorum `2f+1`, whole-round
+    voiding on equivocation, `silence > f => NoQuorum`;
+  * the six-field task specification (goal / context / done / todo / trace /
+    owner) and the three-level evidence grading
+    (verified / cpu-proto / unverified, defaulting closed);
+  * the Lv1-Lv7 layered-topology concept, the relay classification
+    (Dedicated > SelfHosted > ThirdParty > General) and the relay-pool capacity
+    formula;
+  * actor-owned market state, task-id-keyed settlement idempotency, and the
+    deterministic seeded experiment harness.
+
+WHAT WAS NOT COPIED
+
+No upstream source file was copied. The Rust workspace, the Python SDK, the
+JavaScript SDK, the Solidity contracts and the CI configuration were written
+from scratch against a per-defect audit of upstream. See:
+
+  * ATTRIBUTION.md       - provenance, preservation and replacement tables
+  * docs/GAP-ANALYSIS.md - the per-defect audit (76 defects with file:line
+                           evidence and quoted upstream source)
+
+The single exception is test *data*: the conformance vector identified as
+`upstream-v2.5.6-compat` in conformance/vectors.json reproduces the constants
+pinned by upstream's own test `gsn-core/tests/cross_lang_signature.rs`
+(public key, DID, canonical payload and signature). It is included precisely to
+prove byte-level backward compatibility with upstream identities.
+
+DISCLAIMER
+
+This project is independent and is not affiliated with, endorsed by, or
+sponsored by the upstream authors. The names "Agent Universe" and
+"智能体宇宙" belong to their respective owners. This project is named
+NewAgentUniverseByDeepSeek and cites the upstream project throughout its
+documentation.

@@ -1,0 +1,28 @@
+# Build configuration for NewAgentUniverseByDeepSeek.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Upstream agent-universe v2.5.6 has no cargo config. On a machine with 8
+# logical cores and 16 GB RAM, its dependency tree (libp2p + rusqlite bundled +
+# TLS stacks) makes cargo launch 8 concurrent rustc processes; we reproduced a
+# hard failure during that build:
+#
+#     rustc-LLVM ERROR: out of memory
+#     Allocation failed
+#     process didn't exit successfully: rustc.exe ... (STATUS_STACK_BUFFER_OVERRUN)
+#
+# Two mitigations are applied here, both of them harmless on large machines:
+#
+#  1. `jobs = 2` bounds the number of concurrent rustc processes. Override with
+#     `CARGO_BUILD_JOBS=8 cargo build` on a machine that has the RAM.
+#  2. `debug = 0` for dev/test profiles removes debuginfo from codegen, which is
+#     by far the biggest per-process memory consumer.
+#
+# Both are set in the workspace manifest as well, so `cargo test` behaves the
+# same whether or not this file is picked up.
+
+[build]
+jobs = 2
+
+[term]
+color = "auto"

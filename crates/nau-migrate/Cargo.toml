@@ -1,0 +1,29 @@
+[package]
+name = "nau-migrate"
+description = "Migration of upstream agent-universe v2.5.6 historical data (AgentCard JSON, TaskRecord JSON, ledger JSONL) into NewAgentUniverseByDeepSeek state: exact decimal-to-integer-minor-unit money with no float anywhere, legacy did:aip: signature verification with this project's own canonicalizer, and an explicit warning or typed rejection for every semantic difference instead of a silent coercion."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_migrate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nau-migrate"
+path = "src/main.rs"
+
+[dependencies]
+nau-core.workspace = true
+nau-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+sha2.workspace = true
