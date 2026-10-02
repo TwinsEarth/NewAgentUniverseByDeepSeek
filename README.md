@@ -1,13 +1,20 @@
-# NewAgentUniverseByDeepSeek · V3.2.1
+# NewAgentUniverseByDeepSeek · V3.4.5
 
 > **基于对 `TwinsEarth/agent-universe` 全量源码审计的全新架构重写；V2.2.2 起为「一切插件化」架构，V3.2.1 起可在线演进。**
 > A clean-room rewrite of the agent-universe design, produced from a line-by-line audit
 > of upstream; everything-is-a-plugin from V2.2.2, and hot-updatable from V3.2.1.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B%20edition%202021-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B%20edition%202021-orange.svg)](https://www.rust-lang.org/)
 [![Python](https://img.shields.io/badge/python-3.10%2B%20stdlib--only-blue.svg)](sdks/python)
 [![Node](https://img.shields.io/badge/node-18%2B%20zero--deps-green.svg)](sdks/js)
+
+[![CI](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/ci.yml/badge.svg)](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/ci.yml)
+[![Client](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/client.yml/badge.svg)](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/client.yml)
+[![CodeQL](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/codeql.yml/badge.svg)](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/codeql.yml)
+[![Release](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/release.yml/badge.svg)](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/actions/workflows/release.yml)
+[![npm](https://img.shields.io/npm/v/@twinsearth/nau-dsh-plugin?label=npm&color=cb3837)](https://www.npmjs.com/package/@twinsearth/nau-dsh-plugin)
+[![GitHub Release](https://img.shields.io/github/v/release/TwinsEarth/NewAgentUniverseByDeepSeek?label=release)](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/releases)
 
 ---
 
@@ -245,6 +252,61 @@ curl http://127.0.0.1:4002/health
   且无任何 workflow 构建它。与其发布一个必然失败的 UI，不如不发布。
 - **不实现真实 LLM HTTP 调用**：`LlmProvider` 是端口，提供方以数据描述。
 - ~~**不迁移上游历史数据**~~（身份层兼容，但存储与账本语义不同，原先无迁移脚本）→ **V1.1.1 已实现** `crates/nau-migrate`：逐字节按十进制文本转换金额（不经过 `f64`），逐条验证上游签名，无法精确表示则类型化拒绝。**只读 JSON/JSONL，没有数据库读取器**。
+
+---
+
+## CI 与发布 / CI and Releases
+
+### CI 状态
+
+徽章见页面顶部。最近 10 次运行**全部 success**。
+
+| Workflow | 触发 | 作业 | 说明 |
+|---|---|---|---|
+| [CI](.github/workflows/ci.yml) | push / PR / 可复用 | `rust` `python` `js` `conformance` `contracts` `version` `shellcheck` `libp2p` | 主验证。Rust 工具链**固定为项目最低支持版本 `1.85.0`**，三平台矩阵 |
+| [Client](.github/workflows/client.yml) | push / 手动 | `verify` `gate` `tauri`（矩阵） | 前端与 Tauri 构建 |
+| [CodeQL](.github/workflows/codeql.yml) | push / PR / 定时 / 手动 | `analyze`（矩阵） | 静态安全分析 |
+| [Release](.github/workflows/release.yml) | push / 手动 | `verify` · `tag agrees with VERSION` · `build release binaries` · `publish GitHub release` | 发布二进制。**tag 必须与 `VERSION` 一致**，不一致即失败 |
+| [Packages](.github/workflows/packages.yml) | tag `v*` / 手动 | `DSH bundle to GitHub Packages` | 把 DSH 插件发布到 GitHub Packages；**已发布则跳过并读回校验**，重跑不会失败 |
+
+### npm 包
+
+| | |
+|---|---|
+| 包名 | [`@twinsearth/nau-dsh-plugin`](https://www.npmjs.com/package/@twinsearth/nau-dsh-plugin) |
+| 版本 | `3.4.5` |
+| 协议 | MIT |
+| 内容 | **DeepSeek Harness 插件**（bundle）：5 个只读工具 —— `nau_version`、`nau_inspect`、`nau_conformance`、`nau_amount`、`nau_node_status` |
+| 源码 | [integrations/dsh](integrations/dsh) |
+
+安装（harness 自带命令）：
+
+```sh
+dsh plugin --profile <profile> add @twinsearth/nau-dsh-plugin
+```
+
+tarball 直链：`https://registry.npmjs.org/@twinsearth/nau-dsh-plugin/-/nau-dsh-plugin-3.4.5.tgz`
+
+该包**同时发布到两个 registry**：npmjs（公开、免凭据）与
+[GitHub Packages](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/packages)
+（GitHub Packages 即使公开包也要求凭据）。
+
+### 发布产物
+
+[`v3.4.5` Release](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/releases/tag/v3.4.5) 提供：
+
+- `nau`、`nau-daemon` —— 节点二进制
+- `SHA256SUMS` —— 校验和
+- `twinsearth-nau-dsh-plugin-3.4.5.tgz` —— DSH 插件包（与 npm 上的**逐字节相同**）
+
+### 本地复现全部验证
+
+```sh
+node scripts/verify-all.mjs
+```
+
+**21 道关卡** + **30 项部署检查**。缺少外部工具时该关卡标为 **SKIP 并列入 NOT VERIFIED**——
+不静默通过，也不假装通过；需要全部通过时加 `--allow-missing-tools` 会反过来失败。
 
 ---
 
