@@ -1,0 +1,127 @@
+# Publish the DeepSeek Harness bundle to GitHub Packages.
+#
+# WHY A WORKFLOW RATHER THAN A TOKEN ON SOMEONE'S LAPTOP
+# -----------------------------------------------------
+# The bundle is already on npmjs.com. GitHub Packages is a **different registry**, and publishing
+# there needs `write:packages` -- a scope the repository's existing automation token does not have.
+# The choice was to ask a human to mint and paste a new credential, or to let the CI run that
+# already has `GITHUB_TOKEN` do it with `packages: write` scoped to this one job.
+#
+# The second is better for a reason beyond convenience: a token that can write packages can also
+# overwrite them, and the version that stays inside the run that produced it is the version that
+# never lives in a chat log or a file on disk.
+#
+# WHAT THIS DOES NOT DO
+# ---------------------
+# It does not add a `publishConfig.registry` to the package. That field is a permanent statement in
+# the manifest, and a manifest that says "I belong to GitHub Packages" would make the npmjs publish
+# silently go to the wrong registry later. The registry is chosen here, per run, and the manifest
+# keeps npmjs as its default.
+
+name: Packages
+
+# The same rule as the other workflows: a superseded run is cancelled, and `github.workflow` is in
+# the group so this file can never cancel a run of a different one.
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  # Every release tag, so a published release and a published package cannot drift apart.
+  push:
+    tags:
+      - 'v*'
+  # And by hand, because the first package for an existing tag is published without a new tag.
+  workflow_dispatch:
+
+jobs:
+  dsh-bundle:
+    name: DSH bundle to GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The whole reason this job exists. Scoped to this job, not to the workflow, so no other job
+      # in this file could publish a package even if it were changed to try.
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.1.0
+        with:
+          # A registry, not a toolchain: this step writes the `.npmrc` that points the scope at
+          # GitHub Packages and reads the token from NODE_AUTH_TOKEN below.
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@twinsearth'
+          node-version: '20'
+
+      - name: Publish, unless this version is already there
+        working-directory: integrations/dsh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # The scope must equal the repository owner, case-insensitively. GitHub refuses a
+          # mismatch with a 403 that never mentions scope ownership, so it is checked here where
+          # the message can say what is wrong.
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          # `@` stripped, and that is the whole bug this line replaces: the scope as written in a
+          # package name carries its `@`, the repository owner does not, and comparing them raw
+          # makes `@twinsearth` differ from `TwinsEarth` -- so the guard rejected a name that is
+          # exactly right. The two values are printed together precisely so that a wrong guard
+          # shows what it compared instead of only that it refused.
+          SCOPE=${NAME%%/*}
+          SCOPE=${SCOPE#@}
+          OWNER=${GITHUB_REPOSITORY%%/*}
+          echo "package: $NAME@$VERSION  scope: $SCOPE  owner: $OWNER"
+          if [ "$(echo "$SCOPE" | tr '[:upper:]' '[:lower:]')" != "$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "::error::GitHub Packages requires the npm scope to be the repository owner"
+            exit 1
+          fi
+
+          # `packages: write` does not allow republishing a version, and a re-run of this workflow
+          # after a tag move is a normal thing to do. Reporting "already published" and succeeding
+          # is the honest outcome; failing would make an idempotent operation look broken, and
+          # silently swallowing a real failure is what this repository refuses everywhere else.
+          if npm view "$NAME@$VERSION" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already published to GitHub Packages; nothing to do"
+            exit 0
+          fi
+
+          # `--workspaces=false`: the repository root is not an npm workspace, and npm walks up
+          # looking for one. Saying so explicitly keeps this from depending on that staying true.
+          npm publish --workspaces=false
+
+      - name: Read the published package back
+        working-directory: integrations/dsh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          # A publish that reported success and a package that can be read are different claims,
+          # and this repository does not treat the first as evidence of the second. GitHub Packages
+          # needs the token even for its own public packages, which is why this step carries one.
+          node -e '
+            const [name, version] = process.argv.slice(1);
+            const url = `https://npm.pkg.github.com/${name.replace("/", "%2F")}`;
+            const res = await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${process.env.NODE_AUTH_TOKEN}`,
+                Accept: "application/vnd.npm.install-v1+json",
+              },
+            });
+            if (!res.ok) {
+              console.error(`::error::published but not readable: ${res.status}`);
+              process.exit(1);
+            }
+            const body = await res.json();
+            const found = Object.keys(body.versions || {});
+            console.log(`readable: ${body.name} versions ${found.join(", ")}`);
+            if (!found.includes(version)) {
+              console.error(`::error::${version} is not among the readable versions`);
+              process.exit(1);
+            }
+          ' "$NAME" "$VERSION"

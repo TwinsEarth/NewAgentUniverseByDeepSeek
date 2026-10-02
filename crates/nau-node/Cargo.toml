@@ -1,0 +1,72 @@
+[package]
+name = "nau-node"
+description = "NewAgentUniverse node: composition root, HTTP/JSON API with enforced methods and state preconditions, and the nau / nau-daemon binaries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "nau_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nau-daemon"
+path = "src/bin/nau-daemon.rs"
+
+[[bin]]
+name = "nau"
+path = "src/bin/nau.rs"
+
+# The integrated node: the same market and HTTP API as `nau-daemon`, plus a real
+# libp2p swarm that replicates the agent registry to peers.
+[[bin]]
+name = "nau-p2p-daemon"
+path = "src/bin/nau-p2p-daemon.rs"
+
+[dependencies]
+nau-core.workspace = true
+nau-ledger.workspace = true
+nau-consensus.workspace = true
+nau-store.workspace = true
+nau-market.workspace = true
+# The Agent Sandbox. Its routes live in `src/api/sandbox_routes.rs`; the crate
+# itself is the enforcement (a capability model where an unenforceable boundary is
+# a typed refusal, a NullExecutor default that executes nothing, per-sandbox locks
+# and a startup sweep for orphaned directories).
+nau-sandbox.workspace = true
+# The plugin kernel. `src/plugin_cli.rs` is the external interface: it prints the
+# permission matrix by *asking the code* for each cell rather than quoting a document,
+# and it runs the full load pipeline over a directory so a refusal can be read stage by
+# stage. A refusal is a typed answer here, not an error path.
+nau-plugin.workspace = true
+# The plugins themselves, and the framework that runs the one tier living in the host's
+# address space. `src/plugin_host.rs` boots them: a system plugin still goes through a
+# manifest, a signature and a capability token, so the one code path that shares the
+# host's memory is not the one path with no verification.
+nau-plugins.workspace = true
+ed25519-dalek.workspace = true
+# The real libp2p stack (TCP + Noise + Yamux + Kademlia + GossipSub + Relay v2),
+# so this node can reach peers instead of only its own loopback HTTP port.
+nau-libp2p = { workspace = true, features = ["libp2p"] }
+nau-net.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+nau-core = { workspace = true }
+# `tests/plugin_cli.rs` signs a real manifest and runs the real binary against it, so
+# the acceptance path is exercised with a genuine Ed25519 signature rather than a
+# fixture that agrees with itself.
+sha2.workspace = true

@@ -1,0 +1,16 @@
+# NewAgentUniverseByDeepSeek tools for DeepSeek Harness.
+#
+# `insert` rather than a bare entry list. A patch list is **id-targeted**: an entry without
+# `insert` replaces fields on an entry that already exists, and the loader's own diagnostic for
+# getting this wrong is `patch: entry "<id>" not found` -- which is what this file produced while
+# it was written as a plain list. `insert` is the key that appends entries instead.
+#
+# `bin` points at this checkout's debug build so the bundle works immediately after a local
+# install. Anywhere else, either edit this line, or drop it and set `NAU_BIN` -- the tools fall
+# back to `nau` on `PATH`, and a missing binary is reported with the name of the setting to fix
+# rather than as an empty success.
+- insert:
+    - id: nau-tools
+      name: '@twinsearth/nau-dsh-plugin/tools'
+      config:
+        bin: 'E:/DS/NewAgentUniverseByDeepSeek/target/debug/nau.exe'

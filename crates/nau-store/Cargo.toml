@@ -1,0 +1,25 @@
+[package]
+name = "nau-store"
+description = "NewAgentUniverse durable persistence port: an append-only JSONL agent/task/ledger store that is actually read back on restart, with torn-write tolerance and poison-free locking. Pure Rust, no C toolchain."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# The persisted ledger journal is hash-chained (upstream v2.8.2 fix, finding A:
+# its journal table had no hash chain, no signature, no checksum and no
+# constraint, which made `independent_audit`'s "we trust only the journal" claim
+# vacuous). `sha2` is a real, stable hash; `hex` renders the digest as lowercase
+# hex, the same shape the rest of the workspace uses.
+sha2.workspace = true
+hex.workspace = true

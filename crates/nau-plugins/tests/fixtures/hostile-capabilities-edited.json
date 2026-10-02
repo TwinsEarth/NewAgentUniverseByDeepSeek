@@ -1,0 +1,39 @@
+{
+  "plugin": {
+    "name": "com.twinsearth.official.market",
+    "version": "1.4.0",
+    "abi": "3.2",
+    "entry": "market.bin",
+    "publisher": "did:nau:fe812c12f3ab4ce6",
+    "module_sha256": "568075ba20b40d5bb6bc7e8c67d1723870e2dda4315146e15add5c8183a1acf3"
+  },
+  "capabilities": {
+    "grant": [
+      "plugin:lifecycle:read",
+      "plugin:message:send",
+      "plugin:storage:own",
+      "kernel:policy:write"
+    ]
+  },
+  "limits": {
+    "memory_bytes": 268435456,
+    "cpu_ms": 20000,
+    "disk_bytes": 67108864,
+    "max_processes": 4,
+    "max_output_bytes": 262144
+  },
+  "waivers": {
+    "cpu_ms": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "disk_bytes": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "filesystem_confinement": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "max_open_files": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
+  },
+  "signature": {
+    "publisher_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "manifest_digest": "34e194fb1db2195af5f82b2c2754ad44691980cce1bc0c8fb6c0fefecf5eda65",
+    "sig": "30825bf3ca8c6713de1e5dbda0bb7db017fea5b97ba04c323eb538cfb55524bc25f7e64b7f6b1f8c5abde9c3cea7b292402449c0d0a919d7b5ada5947e858001",
+    "counter_sig": "ffb8c98c8be558c3cb8ee80c68d63f115bd9c34023e9cbdc4367eeced535e60105ef7262c50eb28b4bdda2f7298d07fe32f5a9a301b4475634b59e789c91490a",
+    "counter_key": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
+  }
+}
