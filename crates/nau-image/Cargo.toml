@@ -1,0 +1,15 @@
+[package]
+name = "nau-image"
+description = "NewAgentUniverse image chunk reader: resolves an image manifest's chunks on demand, fetches only what is asked for, and records per-chunk latency so a fetch plan can be measured rather than asserted."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+nau-core.workspace = true

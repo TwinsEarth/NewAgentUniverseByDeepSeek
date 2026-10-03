@@ -181,16 +181,25 @@ const fail = (check, detail) => findings.push({ check, detail });
 {
   const manifest = fs.readFileSync(path.join(KERNEL, 'Cargo.toml'), 'utf8');
   const depSection = manifest.split('[dependencies]')[1] || '';
-  const forbidden = ['nau-node', 'nau-http', 'nau-libp2p', 'nau-market', 'nau-mcp'];
+  // `nau-image` is in this list for a different reason from the others. The host crates are
+  // forbidden because a kernel that knows about its plugins is not a plugin kernel;
+  // `nau-image` is forbidden because resolving a chunk means fetching one, and a kernel that
+  // can fetch is a kernel with I/O in it. The crate was created in A-05 precisely so the
+  // manifest vocabulary (in `nau-core`, no I/O) and the fetch machinery (in `nau-image`) do
+  // not have to live together.
+  const forbidden = ['nau-node', 'nau-http', 'nau-libp2p', 'nau-market', 'nau-mcp', 'nau-image'];
   const found = forbidden.filter((d) => new RegExp(`^\\s*${d}[.\\s=]`, 'm').test(depSection));
   if (found.length) {
     fail(
       'kernel-layering',
       `the kernel must not depend on the host crates (found: ${found.join(', ')}); ` +
-        'a kernel that knows about its plugins is not a plugin kernel',
+        'a kernel that knows about its plugins is not a plugin kernel, and one that can ' +
+        'fetch image chunks has I/O in it',
     );
   } else {
-    notes.push('kernel does not depend on nau-node/nau-http/nau-libp2p/nau-market/nau-mcp');
+    notes.push(
+      'kernel does not depend on nau-node/nau-http/nau-libp2p/nau-market/nau-mcp/nau-image',
+    );
   }
 }
 
