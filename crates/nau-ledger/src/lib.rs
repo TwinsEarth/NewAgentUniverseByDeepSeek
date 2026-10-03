@@ -80,6 +80,7 @@
 
 pub mod account;
 pub mod entry;
+pub mod fork;
 pub mod journal;
 pub mod ledger;
 pub mod report;
@@ -91,6 +92,7 @@ pub use account::{
     escrow_account, stake_account, AccountId, ESCROW_PREFIX, MAX_ACCOUNT_ID_LEN, STAKE_PREFIX,
 };
 pub use entry::{EntryKind, LedgerEntry};
+pub use fork::{Contested, ForkedLedger};
 pub use journal::{
     entry_digest, BreakKind, JournalAnchor, JournalBreak, JournalChain, GENESIS_DIGEST,
     JOURNAL_DOMAIN,

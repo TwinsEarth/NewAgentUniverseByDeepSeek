@@ -142,8 +142,29 @@ function startDaemon(tag) {
   p.stdout.pipe(logStream, { end: false });
   p.stderr.pipe(logStream, { end: false });
   p.on('exit', (code, sig) => {
-    logStream.end();
     say(`  [daemon/${tag}] exited code=${code} signal=${sig}`);
+  });
+  // The log stream is ended on `close`, **not** on `exit`, and that distinction is a real bug
+  // that took three CI failures to find.
+  //
+  // `exit` fires when the process terminates. The pipe may still be carrying its last writes --
+  // stdio is closed separately, and `close` is the event that fires after it has. Ending the
+  // stream on `exit` therefore **discards the daemon's final stderr**, which is where
+  // `stopped N plugin(s); M could not be stopped` is written, as the last thing a graceful
+  // shutdown does.
+  //
+  // The symptom was the shape a race always has: the shutdown check passed on the Release
+  // workflow's ubuntu job and failed on the Client workflow's ubuntu job, for the same commit.
+  // Green, green, red, green. The message was never missing from the daemon -- it was missing
+  // from the file.
+  //
+  // `closed` is a promise a caller can await, and `stopDaemon` does: waiting for `exitCode` is
+  // not enough, because that is set at `exit`.
+  p.closed = new Promise((resolve) => {
+    p.on('close', () => {
+      logStream.end();
+      resolve();
+    });
   });
   return p;
 }
@@ -152,6 +173,9 @@ async function stopDaemon(p) {
   p.kill();
   for (let i = 0; i < 60 && p.exitCode === null; i++) await sleep(100);
   if (p.exitCode === null) p.kill('SIGKILL');
+  // After the kill, wait for stdio to actually close -- otherwise the caller polls a file the
+  // daemon's last write has not reached yet, which is the same race one level up.
+  if (p.closed) await Promise.race([p.closed, sleep(5000)]);
 }
 async function waitHealthy(timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
