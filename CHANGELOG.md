@@ -78,6 +78,27 @@ Linux 专有的，所以在 Windows 与 macOS 上永远不可用，而**说出�
 结构上与我改的 crate 无关——但它是**门禁视野之外的一块**，值得后续决定是否让 CI 也跑一条
 较新的工具链。
 
+### 发布时被 CI 抓到的一件事：Windows 上有一条检查从不执行
+
+第一次打 tag 后 `Release` 在 **ubuntu 与 macos 失败**，而 **windows 通过**，于是
+`tag agrees with VERSION` 之后的步骤全部跳过、Release 没被创建。失败点是部署冒烟测试里的：
+
+```
+the daemon stops its plugins when it is asked to stop
+  FAIL the daemon must stop all 17 plugins, it stopped 18
+```
+
+那条检查在 Windows 上**提前返回**——`child.kill()` 在 Windows 是 `TerminateProcess`，
+不会产生优雅停止的日志行，所以它写的是 *"not exercised on Windows … the Linux and macOS
+jobs run it natively"*。**本地 30/30 全绿，指的是同一份清单，但不是同一项验证。**
+
+修法不是把 17 改成 18，而是让断言从 **daemon 自报的启动数**（`GET /plugins` 的 `count`）派生：
+「daemon 必须停掉它启动的每一个插件」这句话不会过期。这是本项目第若干次遇到同一个模式——
+**一个写死的数字，和一个从未重算它的断言**。
+
+**已核查这是唯一一处**：`deploy-local.mjs` 里只有这一条检查因平台跳过，
+Rust 侧与文档侧也没有其它写死的系统插件数。
+
 ### 验证
 
 | | |

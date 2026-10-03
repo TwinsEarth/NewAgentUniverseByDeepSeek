@@ -101,6 +101,16 @@ function cargoBinAt(profile, n) {
 const cargoBin = (n) => cargoBinAt(PROFILE, n);
 
 let daemon = null;
+
+/// How many plugins the running daemon reported at boot, so the shutdown check can compare against
+/// what this daemon actually started rather than against a number written here.
+///
+/// The shutdown check used to assert `stopped === 17` literally, and it is skipped on Windows
+/// (`child.kill()` is `TerminateProcess`, so no graceful stop line appears). Adding an eighteenth
+/// system plugin therefore passed every local run on Windows and failed the Linux and macOS jobs --
+/// which is the shape of defect a deployment check exists to catch, and the reason the number is
+/// no longer written down: "a daemon stops every plugin it started" cannot go stale.
+let bootedPluginCount = null;
 function startDaemon(tag) {
   const logStream = fs.createWriteStream(path.join(LOGS, `daemon-${tag}.log`), { flags: 'a' });
   // A write error must be reported, not thrown.
@@ -239,6 +249,8 @@ async function main() {
     assert(r.status === 200, `/plugins -> HTTP ${r.status}`);
     const count = Number(r.json && r.json.count);
     assert(count > 0, `the daemon booted ${count} plugins`);
+    // Remembered for the shutdown check, which asserts that every one of these is stopped.
+    bootedPluginCount = count;
     const plugins = (r.json && r.json.plugins) || [];
     assert(plugins.length === count, `count ${count} disagrees with ${plugins.length} entries`);
     const notRunning = plugins.filter((p) => p.state !== 'running');
@@ -638,9 +650,20 @@ async function main() {
       m,
       `the daemon must report stopping its plugins; the tail of its log is: ${JSON.stringify(log.slice(-400))}`,
     );
-    assert(Number(m[1]) === 17, `the daemon must stop all 17 plugins, it stopped ${m[1]}`);
+    // Compared against what this daemon booted, not a number in this file. The literal was 17 and
+    // A-03 made it 18; because this branch never runs on Windows, the mismatch reached CI with a
+    // green local run behind it.
+    assert(
+      bootedPluginCount !== null,
+      'the boot check must have run first, or there is nothing to compare the shutdown against',
+    );
+    assert(
+      Number(m[1]) === bootedPluginCount,
+      `the daemon booted ${bootedPluginCount} plugin(s) and stopped ${m[1]}; every plugin it ` +
+        `started must be stopped`,
+    );
     assert(Number(m[2]) === 0, `${m[2]} plugin(s) could not be stopped`);
-    return `daemon stopped ${m[1]} plugin(s), none failed`;
+    return `daemon stopped ${m[1]} of ${bootedPluginCount} plugin(s), none failed`;
   });
 
   await check('store files were actually written to disk', () => {
