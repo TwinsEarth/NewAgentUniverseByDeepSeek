@@ -880,7 +880,7 @@ mod tests {
         // `nau-plugin` was updated too. It fired when `crypto:channel` was added, and
         // again for A-03's `sandbox:create` / `sandbox:configure`, which is exactly what
         // it is for.
-        assert_eq!(Capability::ALL.len(), 19);
+        assert_eq!(Capability::ALL.len(), 21);
         assert_eq!(Tier::LOADABLE.len(), 4);
         assert_eq!(Tier::ALL.len(), 5);
     }

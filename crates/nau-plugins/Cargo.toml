@@ -76,6 +76,13 @@ path = "src/bin/nau-plugin-skill.rs"
 name = "nau-plugin-chain-anchor"
 path = "src/bin/nau-plugin-chain-anchor.rs"
 
+# B-02. The first official door that runs agents rather than serving them. It is listed here
+# with the others because it is a delivered target: a `[[bin]]` section is what makes
+# `cargo build` produce it, and the migration document's runtime table names the file.
+[[bin]]
+name = "nau-plugin-agent-council"
+path = "src/bin/nau-plugin-agent-council.rs"
+
 # Adopted from `agent-universe` v3.5.0's business-enabled official plugins. Note the names
 # differ from upstream's: their `swarm-emergence` is an emergence judgement (not consensus),
 # and their `chain-bridge` is an *offline* port of the ReputationRegistry contract -- which is

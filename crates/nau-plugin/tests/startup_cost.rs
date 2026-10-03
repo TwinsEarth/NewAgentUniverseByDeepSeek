@@ -161,12 +161,22 @@ fn no_target_is_reported_as_a_measurement() {
 }
 
 #[test]
-fn a_native_runtime_starts_inside_its_declared_range() {
-    // The one measurement narrow enough to assert. `NativeRuntime::new()` is the whole of what
-    // "starting" a native runtime means here, so timing it times the claim.
-    let cost = RuntimeKind::Native.startup_cost();
+fn a_native_runtime_is_cheaper_than_a_process_and_the_absolute_figure_is_reported() {
+    // This test used to assert that the measured native startup fell inside the declared range.
+    // It failed on the macOS and Windows CI runners, and the reason is worth keeping:
+    //
+    //   the module documentation above says a bound tight enough to fail on a loaded CI runner
+    //   produces a test people re-run rather than read. That sentence was written in this file,
+    //   and the assertion it warns about was shipped in the same file.
+    //
+    // An absolute duration is a property of the machine, the profile and the load. Asserting one
+    // across three platforms is asserting the runners. What *is* machine-independent is the
+    // **ordering**: instantiating a handle in this process cannot be slower than spawning a
+    // child, by orders of magnitude, on any machine. So the ordering is asserted and the
+    // absolute figure is reported.
+    let native = RuntimeKind::Native.startup_cost();
     assert!(
-        cost.is_measured(),
+        native.is_measured(),
         "this test only means something if it is measured"
     );
 
@@ -176,14 +186,23 @@ fn a_native_runtime_starts_inside_its_declared_range() {
     });
 
     println!(
-        "  native: {} declared, {}us measured",
-        cost.describe(),
+        "  native: {} declared, {}us measured here (not asserted -- an absolute duration is a \
+         property of this machine, not of the runtime)",
+        native.describe(),
         per_call
     );
+
+    // What is asserted: finite, and cheaper than the process floor. `Process` declares a
+    // one-millisecond floor even as a target, and no machine instantiates a handle that slowly.
     assert!(
-        per_call >= cost.min_micros && per_call <= cost.max_micros,
-        "native startup measured at {per_call}us, outside the declared {}",
-        cost.describe()
+        per_call < 1_000_000,
+        "instantiating a handle took over a second"
+    );
+    assert!(
+        per_call < RuntimeKind::Process.startup_cost().min_micros,
+        "instantiating a native handle ({per_call}us) must be cheaper than spawning a child \
+         (floor {}us); if this fails, the two declarations have swapped",
+        RuntimeKind::Process.startup_cost().min_micros
     );
 }
 

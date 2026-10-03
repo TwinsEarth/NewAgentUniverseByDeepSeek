@@ -85,6 +85,7 @@
 | `com.twinsearth.official.agent` | 分层记忆（个体/群体/跨代） | `nau-plugin-agent.rs`（`validate`/`project` → `nau_core::domain::agent` 的**当前** `AgentCard`） | **可运行** |
 | `com.twinsearth.official.skill` | 谁做得了一个活：由调用方给出的名册决定（上游 `v3.5.0` 的 `official.agent-skill`） | `nau-plugin-skill.rs`（`match` → `nau_core::domain::agent::Skill` 解析 + `Market::discover` 所用的**小写 id** 规则） | **可运行** |
 | `com.twinsearth.official.chain-anchor` | 只写一次的 AgentCard 锚点，离线：`AgentCardAnchor.sol` 的规则（上游 `v3.5.0` 的 `official.chain-anchor`） | `nau-plugin-chain-anchor.rs`（`anchor`/`verify`/`anchorable`/`page`） | **可运行（离线部分）** |
+| `com.twinsearth.official.agent-council` | 在**已存在的**沙盒之上召集一个智能体委员会，对各自状态做快照与恢复（v3.6.0 新增） | `nau-plugin-agent-council.rs`（`convene`/`snapshot`/`restore`/`roster`） | **可运行** |
 | `com.twinsearth.official.economy` | 多维信誉、质押、结算策略 | — | **未实现**：`nau-ledger` 已是 T0 的 `sys.ledger`；多维信誉的独立面已被 T3 的 `com.example.reputation` 用掉 |
 | `com.twinsearth.official.swarm` | 群体智能、BFT-lite 委员会 | `nau-plugin-emergence.rs`（`detect`） | **可运行，但 `detect` 不作判断**——见下方「我们收窄了什么」 |
 | `com.twinsearth.official.shard` | 分片存储 | — | **未实现**：`nau-erasure` 已是 T0 的 `sys.erasure`；没有独立于它的分片面 |
@@ -150,6 +151,7 @@
 | `com.twinsearth.official.agent` | T1 | `nau-plugin-agent.rs` | **可运行** |
 | `com.twinsearth.official.skill` | T1 | `nau-plugin-skill.rs` | **可运行** |
 | `com.twinsearth.official.chain-anchor` | T1 | `nau-plugin-chain-anchor.rs` | **可运行** |
+| `com.twinsearth.official.agent-council` | T1 | `nau-plugin-agent-council.rs` | **可运行** |
 | `com.twinsearth.official.swarm` | T1 | `nau-plugin-emergence.rs` | **可运行** |
 | `com.twinsearth.official.bridge` | T1 | `nau-plugin-bridge.rs` | **可运行** |
 | `com.twinsearth.certified.swarm` | T2 | `nau-plugin-swarm.rs` | **可运行** |

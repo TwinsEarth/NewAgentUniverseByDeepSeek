@@ -156,7 +156,7 @@ impl Official {
 /// (`com.twinsearth.official.*`) rather than the short `off.*` spelling used elsewhere in
 /// the same document: the tier is derived from the prefix, and two spellings would derive
 /// two different tiers.
-pub const OFFICIALS: [Official; 13] = [
+pub const OFFICIALS: [Official; 14] = [
     Official {
         name: "com.twinsearth.official.shard",
         version: "1.0.0",
@@ -258,6 +258,25 @@ pub const OFFICIALS: [Official; 13] = [
         summary: "Write-once agent-card anchors, offline: the rules of AgentCardAnchor.sol",
         from: "v3.5.0 chain-anchor",
         capabilities: &[Capability::StorageOwn],
+    },
+    // B-02. The first official plugin that runs **agents** rather than serving them, and the
+    // reason the snapshot/restore capabilities were added in the same release.
+    //
+    // Its capability list is the minimum that lets it do its job, and the omissions are the
+    // interesting part. It holds no `sandbox:create`: it convenes a council over sandboxes
+    // `sys.ausec` already made, so giving it the ability to make more would be authority it
+    // never exercises. It holds no `kernel:*` of any kind -- see `Capability::is_kernel` for
+    // why snapshot and restore are not kernel capabilities.
+    Official {
+        name: "com.twinsearth.official.agent-council",
+        version: "1.0.0",
+        summary: "Convenes a council of agents over existing sandboxes, snapshotting and restoring their state",
+        from: "new in v3.6.0",
+        capabilities: &[
+            Capability::StorageOwn,
+            Capability::SandboxSnapshot,
+            Capability::SandboxRestore,
+        ],
     },
 ];
 

@@ -150,13 +150,43 @@ pub enum Capability {
     /// A plugin that can create sandboxes but not configure them cannot weaken the
     /// isolation of the ones it makes.
     SandboxConfigure,
+    // ---- snapshots (Agent Council, v3.6.0) ---------------------------
+    /// Take a snapshot of a sandbox's state.
+    ///
+    /// A third member of the sandbox family rather than a widening of
+    /// [`Capability::SandboxCreate`], because the three failures are different: creating a
+    /// sandbox spends resources, configuring one can weaken its isolation, and snapshotting
+    /// one **reads its memory**. A plugin that only needs to start sandboxes should not be
+    /// able to copy what is inside them.
+    SandboxSnapshot,
+    /// Restore a sandbox from a snapshot.
+    ///
+    /// Split from [`Capability::SandboxSnapshot`] for the mirror-image reason: reading a
+    /// snapshot is a disclosure, and writing one back is a **substitution** — a restored
+    /// sandbox runs whatever the snapshot holds, so a plugin that can restore from a
+    /// snapshot it did not take can put arbitrary prior state in front of a caller that
+    /// asked for a fresh sandbox.
+    SandboxRestore,
+    // Neither of the two above is in `is_kernel()`, and the distinction is worth stating
+    // because the opposite reading is available. Kernel authority is about **what the kernel
+    // will enforce**: `SandboxCreate` and `SandboxConfigure` decide a sandbox's isolation,
+    // which is why they are reserved to the system tier and no approval can grant them.
+    // Snapshot and restore operate **inside a boundary that has already been decided** -- they
+    // move a sandbox's state around, they do not change what that sandbox is confined by.
+    //
+    // Marking them kernel would therefore be wrong twice over: it would overstate what they
+    // can do, and it would make them unholdable by the official-tier plugin that exists to
+    // use them (`com.twinsearth.official.agent-council`), because `decision()` refuses every
+    // kernel capability outside the system tier. They are instead granted at Official with
+    // `Approval::VendorTeam`, which is the scrutiny a state-copying capability deserves.
+    // A test asserts this, so a later reader cannot quietly move them.
 }
 
 impl Capability {
     /// Every capability.
     ///
     /// Exhaustive on purpose; see the type's documentation.
-    pub const ALL: [Capability; 19] = [
+    pub const ALL: [Capability; 21] = [
         Capability::LifecycleRead,
         Capability::MessageSend,
         Capability::StorageOwn,
@@ -176,6 +206,8 @@ impl Capability {
         Capability::KernelIsolationConfigure,
         Capability::SandboxCreate,
         Capability::SandboxConfigure,
+        Capability::SandboxSnapshot,
+        Capability::SandboxRestore,
     ];
 
     /// The three capabilities every plugin holds.
@@ -208,6 +240,8 @@ impl Capability {
             Capability::KernelIsolationConfigure => "kernel:isolation:configure",
             Capability::SandboxCreate => "sandbox:create",
             Capability::SandboxConfigure => "sandbox:configure",
+            Capability::SandboxSnapshot => "sandbox:snapshot",
+            Capability::SandboxRestore => "sandbox:restore",
         }
     }
 
@@ -585,11 +619,46 @@ mod tests {
         // totality, and this line exists so that growing the capability set is a
         // decision someone makes on purpose rather than a number that drifts.
         //
-        // 19 as of A-03, which added `sandbox:create` and `sandbox:configure`. Both are
-        // kernel-class (see `is_kernel`), so the third-party refusal test below covers
-        // them without being touched -- which is the point of asserting the cross
+        // 21 as of B-02, which added `sandbox:snapshot` and `sandbox:restore`. Neither is
+        // kernel-class -- see `the_snapshot_capabilities_are_not_kernel_authority` below --
+        // so the third-party refusal test covers them by falling through to the approval
+        // table rather than by being edited, which is the point of asserting the cross
         // product instead of listing examples.
-        assert_eq!(Capability::ALL.len(), 19);
+        assert_eq!(Capability::ALL.len(), 21);
+    }
+
+    #[test]
+    fn the_snapshot_capabilities_are_not_kernel_authority() {
+        // The decision this test pins is argued in the enum's documentation, and it is the kind
+        // of decision a later reader could reverse without noticing what it breaks -- so it is
+        // asserted rather than left to the comment.
+        //
+        // `is_kernel()` capabilities are reserved to the system tier and **no approval can
+        // grant them elsewhere**. If snapshot and restore were kernel-class, the official-tier
+        // plugin that exists to use them could not hold them, and B-02 would be unbuildable.
+        // They are not kernel-class because they operate inside a boundary that has already
+        // been decided: they move a sandbox's state, they do not change what confines it.
+        for cap in [Capability::SandboxSnapshot, Capability::SandboxRestore] {
+            assert!(
+                !cap.is_kernel(),
+                "{} must not be kernel authority: it would then be unholdable by the official \
+                 tier that needs it, and it would overstate what a state-copying capability does",
+                cap.as_str()
+            );
+            // And the positive half: the official tier can hold it, with approval.
+            assert_eq!(
+                cap.decision(Tier::Official),
+                Grant::RequiresApproval(Approval::VendorTeam),
+                "{} must be grantable at the official tier with vendor approval",
+                cap.as_str()
+            );
+            // The negative half: the third-party tier still cannot have it.
+            assert!(
+                matches!(cap.decision(Tier::ThirdParty), Grant::Refused { .. }),
+                "{} must be refused to third-party plugins",
+                cap.as_str()
+            );
+        }
     }
 
     #[test]
