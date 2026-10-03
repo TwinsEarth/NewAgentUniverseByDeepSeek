@@ -8,6 +8,8 @@
 //!   implement byte-for-byte identically.
 //! * [`domain`] — the shared vocabulary: agents, skills, tasks, bids, results,
 //!   disputes, evidence grades, and exact integer [`domain::Money`].
+//! * [`image`] — image manifests and content-addressed chunks: what an AUSec sandbox is
+//!   created from, and how a chunk of it is named.
 //! * [`clock`] — the time port, so that expiry/replay rules are testable.
 //! * [`error`] — one error taxonomy for the whole workspace.
 //!
@@ -33,6 +35,7 @@ pub mod clock;
 pub mod domain;
 pub mod error;
 pub mod identity;
+pub mod image;
 pub mod version;
 
 pub use clock::{Clock, ManualClock, SystemClock};
@@ -45,4 +48,5 @@ pub use error::{NauError, Result};
 pub use identity::{
     canonical, Did, Identity, Keypair, PublicKey, Signature64, DID_PREFIX, DID_PREFIX_LEGACY,
 };
+pub use image::{ChunkDigest, ChunkRef, ImageManifest};
 pub use version::{PROJECT, PROTOCOL_VERSION, UPSTREAM_PROJECT, UPSTREAM_VERSION, VERSION};
