@@ -316,6 +316,16 @@ impl SharedPageView {
     pub fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
+
+    /// The read-only mapping backing this view, where the platform has one.
+    ///
+    /// `pub(crate)` because it is the mechanism, not the API: the reclaim path needs the
+    /// mapping to aim `MADV_PAGEOUT` at, and a caller outside this crate has no business
+    /// holding a mapping handle it did not create.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn mapping(&self) -> Option<&crate::platform::ReadOnlyMap> {
+        Some(&self.mapping)
+    }
 }
 
 #[cfg(test)]

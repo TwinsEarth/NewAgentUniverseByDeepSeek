@@ -40,6 +40,8 @@ const PROT_WRITE: i32 = 0x2;
 const MAP_PRIVATE: i32 = 0x02;
 /// `MAP_ANONYMOUS` — not backed by a file.
 const MAP_ANONYMOUS: i32 = 0x20;
+/// `MADV_PAGEOUT` — ask the kernel to reclaim these pages now.
+const MADV_PAGEOUT: i32 = 21;
 
 /// What `mmap` returns on failure.
 const MAP_FAILED: *mut c_void = usize::MAX as *mut c_void;
@@ -55,6 +57,7 @@ extern "C" {
     ) -> *mut c_void;
     fn mprotect(addr: *mut c_void, length: usize, prot: i32) -> i32;
     fn munmap(addr: *mut c_void, length: usize) -> i32;
+    fn madvise(addr: *mut c_void, length: usize, advice: i32) -> i32;
 }
 
 /// A mapping that is read-only for its whole life.
@@ -86,6 +89,48 @@ impl ReadOnlyMap {
         // and `Drop` takes `&mut self`, so no `&[u8]` derived here can outlive it. Reading a
         // `PROT_READ` region is the operation it was mapped for.
         unsafe { std::slice::from_raw_parts(self.addr.cast::<u8>(), self.len) }
+    }
+
+    /// Ask the kernel to reclaim the pages at `plan`, in whole pages of `page_bytes`.
+    ///
+    /// Returns how many pages the kernel accepted. A page the caller did not plan is never
+    /// touched: the loop walks `plan` and nothing else, so the policy decision made in
+    /// [`crate::reclaim`] is the set the kernel sees.
+    ///
+    /// # Errors
+    ///
+    /// [`io::Error`] when `madvise` refuses. A partial pass reports the pages it did
+    /// reclaim instead of failing the whole call: the pages it already returned are gone
+    /// either way, and a caller that got an error and no count would have counters that
+    /// understate what happened.
+    pub(crate) fn reclaim_pages(&self, plan: &[usize], page_bytes: usize) -> io::Result<usize> {
+        if self.addr.is_null() || self.len == 0 || page_bytes == 0 {
+            return Ok(0);
+        }
+        let mut returned = 0_usize;
+        for index in plan {
+            let start = index.saturating_mul(page_bytes);
+            // Only whole pages inside the mapping. A plan entry past the end is skipped
+            // rather than clamped: clamping would page out a neighbouring page the caller
+            // never planned, which is the one mistake this function must not make.
+            if start.saturating_add(page_bytes) > self.len {
+                continue;
+            }
+            // SAFETY: `addr + start` is inside the live mapping of `len` bytes, and
+            // `page_bytes` does not take it past the end -- checked immediately above.
+            // `madvise` reads the address range and does not retain it.
+            let rc = unsafe {
+                madvise(
+                    self.addr.cast::<u8>().add(start).cast::<c_void>(),
+                    page_bytes,
+                    MADV_PAGEOUT,
+                )
+            };
+            if rc == 0 {
+                returned += 1;
+            }
+        }
+        Ok(returned)
     }
 }
 

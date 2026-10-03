@@ -72,6 +72,14 @@ pub enum Capability {
     /// what this variant being in [`Capability`] buys — the refusal machinery already exists
     /// and does not need a second mechanism.
     SharedPageReadOnly,
+    /// A guest's idle pages can be returned to the host **and the counters say so**.
+    ///
+    /// The distinction from [`Capability::MemoryLimit`] matters: that one caps what a
+    /// sandbox may take, this one gives back what it is not using. A backend that can do the
+    /// first and not the second must refuse the second rather than report a pass that
+    /// returned nothing — a caller sizing the next sandbox against memory that was never
+    /// returned would be working from a number that was never true.
+    MemoryReclaim,
 }
 
 impl Capability {
@@ -91,6 +99,7 @@ impl Capability {
             Self::OpenFileLimit => "open_file_limit",
             Self::FilesystemConfinement => "filesystem_confinement",
             Self::SharedPageReadOnly => "shared_page_read_only",
+            Self::MemoryReclaim => "memory_reclaim",
         }
     }
 
@@ -98,7 +107,7 @@ impl Capability {
     ///
     /// The length is written out so that adding a capability without adding it here is a
     /// compile error rather than a silently shorter list.
-    pub const ALL: [Capability; 13] = [
+    pub const ALL: [Capability; 14] = [
         Self::EnvAllowlist,
         Self::OutputCap,
         Self::Timeout,
@@ -112,6 +121,7 @@ impl Capability {
         Self::OpenFileLimit,
         Self::FilesystemConfinement,
         Self::SharedPageReadOnly,
+        Self::MemoryReclaim,
     ];
 }
 

@@ -67,6 +67,7 @@ pub mod error;
 pub mod executor;
 pub mod manager;
 pub mod process;
+pub mod reclaim;
 pub mod shared_page;
 pub mod spec;
 
@@ -85,6 +86,10 @@ pub use manager::{
     DEFAULT_MAX_SANDBOXES, MAX_ORPHANS_PER_SWEEP, ORPHAN_AGE_SECS,
 };
 pub use process::{ExecOutcome, ExecRequest, SAFE_PATH};
+pub use reclaim::{
+    MemoryReclaimSupport, MemoryStats, PageResidency, PageState, ReclaimReport, Reclaimer,
+    MEMORY_RECLAIM_SUPPORT,
+};
 pub use shared_page::{
     SharedPage, SharedPageAccess, SharedPageSupport, SharedPageView, SHARED_PAGE_SUPPORT,
 };
