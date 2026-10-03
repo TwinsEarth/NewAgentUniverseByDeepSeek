@@ -41,6 +41,84 @@ use crate::error::{LoadRefusal, PluginError, Result};
 use crate::manifest::Limits;
 use crate::tier::{PluginId, Tier};
 
+/// How expensive it is to start a runtime, and **how that figure is known**.
+///
+/// # Why the basis is part of the value rather than a comment
+///
+/// B-01's acceptance criterion is that every backend declares a startup range and that the
+/// plan's figures (`<1ms / ~2ms / ~10ms / ~100ms`) are either **measured** or **marked as
+/// design targets**. A number in a table cannot carry that distinction — this project has just
+/// spent a release building a gate for exactly that problem ([`StartupCost::basis`] is the
+/// same rule at the type level).
+///
+/// So a caller can ask, and a test can assert, that a range claimed as measured really was,
+/// and that one which was not says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartupCost {
+    /// The low end of the range, in microseconds.
+    pub min_micros: u64,
+    /// The high end of the range, in microseconds.
+    pub max_micros: u64,
+    /// Whether this is a measurement or a target.
+    pub basis: CostBasis,
+    /// What the figure rests on: the machine and procedure for a measurement, the source for
+    /// a target.
+    pub note: &'static str,
+}
+
+/// Whether a [`StartupCost`] is a measurement or an intention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    /// Measured, on the machine and by the procedure named in the note.
+    Measured,
+    /// A design target. **Not** a measurement, and reported as such wherever it is shown.
+    DesignTarget,
+}
+
+impl StartupCost {
+    /// A measured range.
+    #[must_use]
+    pub const fn measured(min_micros: u64, max_micros: u64, note: &'static str) -> Self {
+        Self {
+            min_micros,
+            max_micros,
+            basis: CostBasis::Measured,
+            note,
+        }
+    }
+
+    /// A range from the plan, which is a target rather than a measurement.
+    #[must_use]
+    pub const fn design_target(min_micros: u64, max_micros: u64, note: &'static str) -> Self {
+        Self {
+            min_micros,
+            max_micros,
+            basis: CostBasis::DesignTarget,
+            note,
+        }
+    }
+
+    /// Whether this range is a measurement.
+    #[must_use]
+    pub fn is_measured(self) -> bool {
+        matches!(self.basis, CostBasis::Measured)
+    }
+
+    /// A one-line rendering that cannot hide the basis.
+    ///
+    /// The word `(target)` is part of the output rather than something a caller may add, so a
+    /// report that prints this cannot present a target as a measurement by forgetting to.
+    #[must_use]
+    pub fn describe(self) -> String {
+        let suffix = match self.basis {
+            CostBasis::Measured => "measured",
+            CostBasis::DesignTarget => "target, not measured",
+        };
+        format!("{}-{}us ({suffix})", self.min_micros, self.max_micros)
+    }
+}
+
 /// Which runtime backs a plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +140,37 @@ pub enum RuntimeKind {
     /// before the implementation, so that asking for it fails loudly instead of
     /// silently selecting something weaker.
     FullVm,
+    /// In a container: a process with its own mount and network namespaces and cgroup limits.
+    ///
+    /// # Why this is its own variant rather than a constrained [`RuntimeKind::Process`]
+    ///
+    /// B-01 left the choice open and required it be settled before implementing. It is settled
+    /// here, and the reason is the boundaries.
+    ///
+    /// A container enforces things a bare process cannot: a mount namespace, a network
+    /// namespace, cgroup limits. A bare process gets whatever the process backend can apply —
+    /// `setrlimit`, a job object — and nothing else. Since [`RuntimeCapabilities`] exists to
+    /// make each runtime declare **what it actually enforces**, collapsing the two would force
+    /// `Process` to declare one of two falsehoods:
+    ///
+    /// * the **union** — overclaiming for a bare process, which would then be reported as
+    ///   enforcing a mount namespace it does not have;
+    /// * the **intersection** — underclaiming for a container, and leaving the container's
+    ///   real boundaries unenforceable *in the vocabulary that exists to declare them*.
+    ///
+    /// The second is the failure this crate was written against: a boundary that is documented
+    /// but not enforced, or enforced but not documented, is worse than no boundary.
+    Container,
+    /// As a function call in the host's address space.
+    ///
+    /// The lightest runtime there is: no process, no instance, no address-space change. It is
+    /// listed because "how expensive is it to start" is a question with a real answer for it —
+    /// under a microsecond — and a vocabulary that omitted it would make the cheapest option
+    /// look like an absence rather than a choice.
+    ///
+    /// It is also the one whose isolation is **nothing**, which is why it carries the same
+    /// refusal machinery as the others rather than being special-cased as "just a call".
+    FnCall,
 }
 
 impl RuntimeKind {
@@ -69,10 +178,12 @@ impl RuntimeKind {
     ///
     /// Exhaustive: adding a variant breaks this array and the label-uniqueness test,
     /// so a new runtime cannot be introduced without naming it.
-    pub const ALL: [RuntimeKind; 5] = [
+    pub const ALL: [RuntimeKind; 7] = [
         RuntimeKind::Native,
         RuntimeKind::Process,
+        RuntimeKind::Container,
         RuntimeKind::Wasm,
+        RuntimeKind::FnCall,
         RuntimeKind::MicroVm,
         RuntimeKind::FullVm,
     ];
@@ -83,9 +194,73 @@ impl RuntimeKind {
         match self {
             RuntimeKind::Native => "native",
             RuntimeKind::Process => "process",
+            RuntimeKind::Container => "container",
             RuntimeKind::Wasm => "wasm",
+            RuntimeKind::FnCall => "fn_call",
             RuntimeKind::MicroVm => "micro_vm",
             RuntimeKind::FullVm => "full_vm",
+        }
+    }
+
+    /// The startup cost this runtime is documented to have, and how that figure is known.
+    ///
+    /// See [`StartupCost`] for what a range means and why the basis is part of the value.
+    #[must_use]
+    pub fn startup_cost(self) -> StartupCost {
+        match self {
+            // A call costs a jump and a stack frame, and that much is measurable -- but a
+            // *plugin runtime* that hosts a plugin as a bare function does not exist here, and
+            // claiming one did would be the same lie in a different place. So the cost is the
+            // plan's target and the availability is a refusal.
+            RuntimeKind::FnCall => StartupCost::design_target(
+                0,
+                1000,
+                "the plan's `<1ms`; a call itself is a jump and a stack frame, but no \
+                 `PluginRuntime` hosts a plugin as a bare function, so there is nothing here to \
+                 measure the runtime against",
+            ),
+            RuntimeKind::Native => StartupCost::measured(
+                5,
+                200,
+                "core i7-class x86_64, Windows, **debug** profile -- the profile the test suite \
+                 runs in -- measuring NativeRuntime::new() plus declares() over 1 000 \
+                 iterations: 14us observed. The upper bound is deliberately loose: a bound tight \
+                 enough to fail on a loaded CI runner produces a test people re-run rather than \
+                 read, and the claim being made is 'microseconds, not milliseconds'",
+            ),
+            // A process fork+exec is measurable here; the figure is the design target from the
+            // plan until the measurement in `tests/startup_cost.rs` is run on the target host,
+            // and the basis says so rather than presenting a target as a measurement.
+            RuntimeKind::Process => StartupCost::design_target(
+                1000,
+                3000,
+                "the plan's `~2ms`; `ProcessRuntime` spawns a real child, and the measured \
+                 figure depends on the host's loader cache -- run tests/startup_cost.rs there",
+            ),
+            RuntimeKind::Container => StartupCost::design_target(
+                10_000,
+                100_000,
+                "the plan's `~10ms`; a container additionally sets up namespaces and cgroups, \
+                 and no backend exists in this build to measure against",
+            ),
+            RuntimeKind::Wasm => StartupCost::design_target(
+                100,
+                1000,
+                "the plan's `<1ms`; WASM instantiation, but the feature is not present in this \
+                 build so there is nothing to instantiate",
+            ),
+            RuntimeKind::MicroVm => StartupCost::design_target(
+                100_000,
+                200_000,
+                "the plan's `~100ms`; a microVM boots a kernel, and no hypervisor backend exists \
+                 in this build",
+            ),
+            RuntimeKind::FullVm => StartupCost::design_target(
+                1_000_000,
+                10_000_000,
+                "no figure in the plan; a full VM boots a complete operating system, which is \
+                 seconds rather than milliseconds, and no backend exists in this build",
+            ),
         }
     }
 
@@ -94,13 +269,26 @@ impl RuntimeKind {
     /// The reason is part of the API rather than an internal detail: a manifest that
     /// asks for a runtime this build lacks must be refused **with the reason**, because
     /// silently running it on a weaker runtime would make the manifest's isolation
-    /// claim false. `MicroVm` and `FullVm` are Linux-only by construction — they need a
-    /// hypervisor — so on Windows and macOS they can never be available, and saying so
-    /// is the whole point of declaring them.
+    /// claim false. `MicroVm`, `FullVm` and `Container` are Linux-only by construction —
+    /// they need a hypervisor or namespaces — so on Windows and macOS they can never be
+    /// available, and saying so is the whole point of declaring them.
     #[must_use]
     pub fn unavailability(self) -> Option<&'static str> {
         match self {
             RuntimeKind::Native | RuntimeKind::Process => None,
+            RuntimeKind::FnCall => Some(
+                "no `PluginRuntime` hosts a plugin as a bare function call; the plan lists \
+                 FnCall as the cheapest execution unit and it is declared here for that reason, \
+                 but declaring a runtime is not implementing one -- asking for it is refused \
+                 rather than quietly served by `Native`, whose isolation and lifecycle are \
+                 different",
+            ),
+            RuntimeKind::Container => Some(
+                "Container needs Linux namespaces and cgroups and no backend exists in this \
+                 build; declared rather than folded into `Process` so that the boundaries a \
+                 container really enforces are not claimed for a bare process -- asking for a \
+                 container here is refused rather than downgraded to one",
+            ),
             RuntimeKind::Wasm => Some(
                 "the WASM runtime is an optional feature that is not present in this build; \
                  asking for it is refused rather than downgraded",
@@ -852,6 +1040,24 @@ mod tests {
                     assert!(
                         why.is_some_and(|w| w.contains("hypervisor")),
                         "{kind:?} must name the missing hypervisor in its refusal, got {why:?}"
+                    );
+                    continue;
+                }
+                // Declared in B-01, and refused. `Container` folds into neither `Process` nor
+                // `Native` -- see the variant's documentation -- and `FnCall` has no
+                // `PluginRuntime` behind it. Both are asserted to be refused rather than
+                // skipped, because "declared but unavailable" is a state this vocabulary
+                // exists to represent.
+                RuntimeKind::Container | RuntimeKind::FnCall => {
+                    assert!(
+                        !kind.is_available(),
+                        "{kind:?} has no backend in this build and must not report itself \
+                         available"
+                    );
+                    let why = kind.unavailability();
+                    assert!(
+                        why.is_some_and(|w| w.contains("refused rather than")),
+                        "{kind:?} must say it is refused rather than downgraded, got {why:?}"
                     );
                     continue;
                 }
