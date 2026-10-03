@@ -591,6 +591,28 @@ gate('dsh-bundle', 'The DeepSeek Harness bundle loads and registers its tools', 
   };
 });
 
+gate('metric-claims', 'Every performance number in the docs carries the five elements', () => {
+  // A-12's gate, and the reason it is a gate rather than a footnote.
+  //
+  // The rule is: a quantitative claim carries (规模, 硬件, 负载, 基线, 定义), and a number
+  // missing any of them must not be written into the documentation. The original AUSec design
+  // stated seven such numbers, all described as measured "in the lab / in production" with none
+  // of the five -- so a reader cannot tell which are measurements and which are hopes, and
+  // cannot reproduce any of them.
+  //
+  // A rule in a review checklist is a rule that holds until the first busy week. Encoded here,
+  // it holds. The script also carries the calibration that scoping it required: the first
+  // candidate rule flagged 23 lines of which most were reports of past events, and a gate that
+  // flags everything is one people learn to skip — worse than none, because it also shows a
+  // green tick.
+  const r = run(NODE, [path.join('scripts', 'check-metric-claims.mjs')]);
+  return {
+    state: r.code === 0 ? 'PASS' : 'FAIL',
+    detail: summarise(r.out),
+    ms: r.ms,
+  };
+});
+
 gate('doc-counts', 'The counts the documents state match what the scripts actually define', () => {
   // WHY THIS GATE EXISTS
   // --------------------
@@ -621,6 +643,11 @@ gate('doc-counts', 'The counts the documents state match what the scripts actual
     'docs/PLUGIN-MIGRATION.md',
     'docs/PLUGIN-ARCHITECTURE.md',
     'docs/SELF-AUDIT.md',
+    // Added in A-13. It stated these counts in three places and was not in this list, so
+    // when the counts moved to 22 and 31 nothing compared them and two of the three went
+    // stale -- the exact failure this gate was written for, in a document the gate did not
+    // read.
+    'docs/DEVELOPMENT-PLAN-v3.5-v3.7-AUSec.md',
   ];
   const wrong = [];
   let claims = 0;

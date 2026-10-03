@@ -288,6 +288,59 @@ async function main() {
   // `sys.policy`'s `matrix` op is the one `nau plugin system` already calls, so the answer
   // is checkable against a second, independent caller rather than against this script's
   // expectation of what a policy matrix looks like.
+  // AUSec's plugin answers in the running node, not only in its unit tests.
+  //
+  // A-13's deployment half. v3.5.0 added `com.twinsearth.sys.ausec` to `standard_plugins()`
+  // and the host's unit tests saw it constructed and declared; what they could not see is
+  // whether the **daemon** boots it. That is the same shape of gap the "daemon hosts its
+  // compiled-in system plugins" check exists for -- seventeen plugins were once registered,
+  // tested and documented while not one of them ran -- so this is a call through the daemon's
+  // HTTP surface rather than a look at a registration list.
+  await check('the AUSec plugin answers in the running node', async () => {
+    const r = await api('POST', '/plugins/com.twinsearth.sys.ausec/call', {
+      capability: 'sandbox:create',
+      op: 'backends',
+    });
+    assert(
+      r.status >= 200 && r.status < 300,
+      `/plugins/com.twinsearth.sys.ausec/call -> HTTP ${r.status}: ${r.text.slice(0, 160)}`,
+    );
+    const answer = r.json;
+    assert(
+      answer && typeof answer === 'object',
+      `expected an object answer, got ${JSON.stringify(answer).slice(0, 160)}`,
+    );
+    // The shape the plugin actually answers with, read from its `backends` handler rather than
+    // assumed: a **count**, a list of available runtimes, and a list of refusals carrying the
+    // reason. The first version of this check treated `backends` as the array and looked for
+    // `available`/`unavailability` on each entry, which is not what the plugin returns.
+    const total = Number(answer.backends);
+    assert(
+      Number.isFinite(total) && total > 0,
+      `AUSec must report how many runtimes it knows, got ${JSON.stringify(answer.backends)}`,
+    );
+    assert(Array.isArray(answer.available), `expected an available list, got ${JSON.stringify(answer.available)}`);
+    assert(Array.isArray(answer.unavailable), `expected an unavailable list, got ${JSON.stringify(answer.unavailable)}`);
+    assert(
+      answer.available.length + answer.unavailable.length === total,
+      `the two lists must account for all ${total} runtimes: ` +
+        `${answer.available.length} available + ${answer.unavailable.length} unavailable`,
+    );
+    // Every refusal names why. On a non-Linux build the Linux-only runtimes are exactly this
+    // case, and the whole AUSec vocabulary exists so that asking succeeds and the answer says
+    // what cannot be provided instead of silently offering something weaker.
+    for (const entry of answer.unavailable) {
+      assert(
+        typeof entry.why === 'string' && entry.why.trim().length > 0,
+        `runtime ${entry.kind} is unavailable but gives no reason; a refusal without one is not actionable`,
+      );
+    }
+    return (
+      `${total} runtime(s): ${answer.available.length} available, ` +
+      `${answer.unavailable.length} refused with a reason, in the running daemon`
+    );
+  });
+
   await check('the daemon can call a system plugin and read its answer', async () => {
     const r = await api('POST', '/plugins/com.twinsearth.sys.policy/call', {
       capability: 'plugin:message:send',
