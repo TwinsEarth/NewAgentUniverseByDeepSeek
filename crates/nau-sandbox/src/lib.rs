@@ -69,6 +69,7 @@ pub mod manager;
 pub mod process;
 pub mod reclaim;
 pub mod shared_page;
+pub mod snapshot;
 pub mod spec;
 
 mod platform;
@@ -93,6 +94,7 @@ pub use reclaim::{
 pub use shared_page::{
     SharedPage, SharedPageAccess, SharedPageSupport, SharedPageView, SHARED_PAGE_SUPPORT,
 };
+pub use snapshot::{Layer, Snapshot, SnapshotId, SnapshotStore, StoreReport};
 pub use spec::{
     AbsoluteProgramPath, Confinement, EnvPolicy, FilesystemPolicy, InheritPolicy, Interpreter,
     Limits, NetworkPolicy, SandboxSpec, Waivers,
