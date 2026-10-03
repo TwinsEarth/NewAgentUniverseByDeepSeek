@@ -331,6 +331,38 @@ mod tests {
     }
 
     #[test]
+    fn the_declared_consistency_claim_for_this_store_holds() {
+        // B-09's declaration, exercised where the component lives.
+        //
+        // `nau_core::domain::consistency::CLAIMS` says this store is snapshot-point consistent
+        // for the question "is a layer named once the same layer later?". A declaration nothing
+        // checks is documentation with extra steps, so the claim is looked up by name and then
+        // the thing it is about is done.
+        let claim = nau_core::domain::consistency::CLAIMS
+            .iter()
+            .find(|c| c.component == "SnapshotStore layers")
+            .expect("this store declares a consistency claim");
+        assert_eq!(
+            claim.model,
+            nau_core::domain::consistency::ConsistencyModel::SnapshotPoint
+        );
+        assert!(claim.is_complete());
+
+        let mut store = SnapshotStore::new();
+        store.store(None, &[layer(7)]).expect("store");
+        let layers = store.layer_count();
+
+        // Storing the same layer again does not produce a second one, and a snapshot with
+        // identical content and parent has an identical id -- there is nothing to converge,
+        // which is what snapshot-point means.
+        let (a, _) = store.store(None, &[layer(7)]).expect("again");
+        let (b, _) = store.store(None, &[layer(7)]).expect("again");
+        assert_eq!(a, b);
+        assert_eq!(store.layer_count(), layers);
+        store.verify(&a).expect("and it still verifies");
+    }
+
+    #[test]
     fn a_layer_shared_across_unrelated_snapshots_is_stored_once() {
         // Deduplication is by content address and not by parentage: a base layer used by two
         // independent snapshots must still be stored once.

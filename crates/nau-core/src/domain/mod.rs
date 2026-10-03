@@ -23,6 +23,7 @@
 
 pub mod agent;
 pub mod checkpoint;
+pub mod consistency;
 pub mod fork;
 pub mod money;
 pub mod org;
@@ -37,6 +38,9 @@ pub use agent::{
     AgentCard, AgentCategory, Pricing, PricingModel, PricingUnit, ReputationScore, Skill, Sla,
 };
 pub use checkpoint::{ExecutionCheckpoint, Resolution, ResumePoint, StepOutcome};
+pub use consistency::{
+    ConsistencyClaim, ConsistencyModel, KnownBoundary, CLAIMS, KNOWN_BOUNDARIES,
+};
 pub use fork::{classify, Fork, Step, StepEffect, Trace};
 pub use money::{major, Money, CURRENCY, DECIMALS, MINOR_UNITS_PER_MAJOR};
 pub use org::{AgentOrg, OrgAction, OrgId, OrgMember, OrgRole, Quota};

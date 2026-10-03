@@ -1,4 +1,4 @@
-# NewAgentUniverseByDeepSeek · V3.6.6
+# NewAgentUniverseByDeepSeek · V3.6.7
 
 > **基于对 `TwinsEarth/agent-universe` 全量源码审计的全新架构重写；V2.2.2 起为「一切插件化」架构，V3.2.1 起可在线演进。**
 > A clean-room rewrite of the agent-universe design, produced from a line-by-line audit
