@@ -135,6 +135,10 @@ impl Official {
             // carried through the load pipeline, so the day one of them needs a peer, the
             // declaration is a line here rather than a kernel change.
             dependencies: Vec::new(),
+            // A-11: the class this manifest runs at. Stated explicitly here rather than
+            // relying on serde's default, so that adding the field is a decision this
+            // construction site made rather than a value it inherited.
+            priority: nau_plugin::PriorityClass::LatencyTolerant,
             signature: SignatureSection {
                 publisher_key: String::new(),
                 manifest_digest: String::new(),

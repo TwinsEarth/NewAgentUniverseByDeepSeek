@@ -1892,6 +1892,7 @@ mod tests {
                 .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
                 .collect::<BTreeMap<String, String>>(),
             dependencies: Vec::new(),
+            priority: nau_plugin::PriorityClass::LatencyTolerant,
             signature: SignatureSection {
                 publisher_key: hex::encode(publisher.verifying_key().to_bytes()),
                 manifest_digest: String::new(),

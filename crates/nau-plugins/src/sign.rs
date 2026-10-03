@@ -163,6 +163,10 @@ pub fn draft_with_abi(
         limits: limits(),
         waivers,
         dependencies: Vec::new(),
+        // A-11: the class this manifest runs at. Stated explicitly here rather than
+        // relying on serde's default, so that adding the field is a decision this
+        // construction site made rather than a value it inherited.
+        priority: nau_plugin::PriorityClass::LatencyTolerant,
         signature: SignatureSection {
             publisher_key: key_hex(publisher),
             manifest_digest: String::new(),

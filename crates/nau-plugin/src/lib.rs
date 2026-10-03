@@ -81,6 +81,7 @@ pub mod lifecycle;
 pub mod manifest;
 pub mod registry;
 pub mod runtime;
+pub mod scheduler;
 pub mod secure;
 pub mod tier;
 
@@ -88,7 +89,10 @@ pub use arbiter::{Arbiter, LoadFailure, LoadRequest, Loaded};
 pub use capability::{Approval, Capability, CapabilityToken, Grant};
 pub use certify::{Certification, Finding, Review, ReviewStage, ScanReport};
 pub use error::{LoadRefusal, PluginError, Result};
-pub use manifest::{Limits, Manifest, SignatureSection, TrustStore, VerifiedManifest};
+pub use manifest::{
+    Limits, Manifest, PriorityClass, SignatureSection, TrustStore, VerifiedManifest,
+};
+pub use scheduler::{Distribution, Scheduler, SubmitError, TaskId};
 pub use tier::{PluginId, Tier};
 
 /// This crate's version, from the workspace manifest.

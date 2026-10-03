@@ -218,8 +218,62 @@ pub struct Manifest {
     /// serialises **byte-for-byte as it did before this field existed**.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<crate::registry::Dependency>,
+    /// How latency-sensitive this plugin's sandbox is.
+    ///
+    /// A-11's field. [`crate::scheduler`] reads it to decide who runs when the concurrency
+    /// ceiling is reached, and the tolerant class is **aged** so that a sustained stream of
+    /// sensitive requests cannot starve it.
+    ///
+    /// `skip_serializing_if` for the same reason `dependencies` carries it: the serialised
+    /// manifest is what the signature covers, so emitting a default for every existing plugin
+    /// would change every digest and invalidate every signature already in the field. A
+    /// manifest that omits this field **serialises byte-for-byte as it did before the field
+    /// existed**, and one that states the tolerant default serialises identically to one that
+    /// omits it — which is right, because they mean the same thing.
+    #[serde(default, skip_serializing_if = "PriorityClass::is_tolerant")]
+    pub priority: PriorityClass,
     /// Signatures. Never covered by the digest.
     pub signature: SignatureSection,
+}
+
+/// How much delay a plugin's sandbox can tolerate.
+///
+/// Two classes, not a number. A numeric priority invites a caller to pick 37, and then the
+/// scheduler's behaviour depends on a value nobody can justify; two classes are a vocabulary
+/// that a review can disagree with. Widening it later is a compatible change; narrowing a
+/// numeric range would not be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriorityClass {
+    /// Tolerates being queued behind bulk work.
+    ///
+    /// The default, so that a plugin which has not thought about latency gets the class that
+    /// cannot make it jump a queue.
+    #[default]
+    LatencyTolerant,
+    /// Must not be queued behind bulk work.
+    LatencySensitive,
+}
+
+impl PriorityClass {
+    /// Whether this is the tolerant default.
+    ///
+    /// The `skip_serializing_if` predicate. Named rather than written inline so that the
+    /// rule "the default is not serialised" is stated once. Takes `&self` because serde
+    /// hands the predicate a reference to the field.
+    #[must_use]
+    pub fn is_tolerant(&self) -> bool {
+        matches!(self, PriorityClass::LatencyTolerant)
+    }
+
+    /// A stable label for reports.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            PriorityClass::LatencyTolerant => "latency_tolerant",
+            PriorityClass::LatencySensitive => "latency_sensitive",
+        }
+    }
 }
 
 /// A manifest that passed all four checks, together with the token it earned.
@@ -818,6 +872,10 @@ mod tests {
             limits: limits(),
             waivers: BTreeMap::new(),
             dependencies: Vec::new(),
+            // A-11: the class this manifest runs at. Stated explicitly here rather than
+            // relying on serde's default, so that adding the field is a decision this
+            // construction site made rather than a value it inherited.
+            priority: PriorityClass::LatencyTolerant,
             signature: SignatureSection {
                 publisher_key: key_hex(publisher),
                 manifest_digest: String::new(),

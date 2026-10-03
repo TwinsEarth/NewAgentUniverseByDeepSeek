@@ -104,6 +104,7 @@ fn signed_manifest(name: &str, caps: &[&str], waive: bool) -> Manifest {
             std::collections::BTreeMap::new()
         },
         dependencies: Vec::new(),
+        priority: nau_plugin::PriorityClass::LatencyTolerant,
         signature: SignatureSection {
             publisher_key: hex_key(&publisher),
             manifest_digest: String::new(),
@@ -335,6 +336,7 @@ fn an_untrusted_host_refuses_a_third_party_plugin_by_default() {
         limits: limits(),
         waivers: waivers(),
         dependencies: Vec::new(),
+        priority: nau_plugin::PriorityClass::LatencyTolerant,
         signature: SignatureSection {
             publisher_key: hex_key(&key),
             manifest_digest: String::new(),

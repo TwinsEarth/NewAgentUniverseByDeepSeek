@@ -643,6 +643,10 @@ mod tests {
             },
             waivers: std::collections::BTreeMap::new(),
             dependencies: Vec::new(),
+            // A-11: the class this manifest runs at. Stated explicitly here rather than
+            // relying on serde's default, so that adding the field is a decision this
+            // construction site made rather than a value it inherited.
+            priority: crate::manifest::PriorityClass::LatencyTolerant,
             signature: crate::manifest::SignatureSection {
                 publisher_key: hex::encode(publisher.verifying_key().to_bytes()),
                 manifest_digest: String::new(),
