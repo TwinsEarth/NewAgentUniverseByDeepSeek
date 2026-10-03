@@ -441,7 +441,10 @@ mod tests {
     fn every_plugin_stops_and_a_stopped_plugin_does_not_answer() {
         let dir = temp_dir("shutdown");
         let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");
-        assert_eq!(boot.names.len(), 17, "the shipped set");
+        // The count is a tripwire: adding a T0 plugin must make someone look here and add it
+        // to the shipped set deliberately. 18 as of A-03, which added
+        // `com.twinsearth.sys.ausec`.
+        assert_eq!(boot.names.len(), 18, "the shipped set");
         for name in &boot.names {
             assert_eq!(boot.state(name), Some(PluginState::Running), "{name}");
         }

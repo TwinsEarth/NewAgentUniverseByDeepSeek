@@ -26,14 +26,18 @@
     "cpu_ms": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
     "disk_bytes": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
     "filesystem_confinement": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "ioctl_filter": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
     "max_open_files": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
-    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
+    "network": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "network_egress_allowlist": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "pmem_shared_read_only": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate",
+    "priority_class": "fixture: this build has no primitive for egress denial, filesystem confinement, disk quota, CPU time or an open-file cap behind a child process; accepted so the load pipeline can be exercised past the runtime gate"
   },
   "signature": {
     "publisher_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
-    "manifest_digest": "a19c3532db8c5c6b7118baaa81651f68138720ecc5dd3deeb8b000610d74b58f",
-    "sig": "eeab9765a40b5c2e06351ffd45d72564f4be3f2fd4213e32a61e821ef98f95f2baf02fb0c92d1c9b68dd276c3fa4f06020aaf7efc4ed4ef87fa4299f1e48880e",
-    "counter_sig": "a38cf7e42752c7756e73100d83e4949185a3a06ba66a5b15a888dfddef212a26924ffb29e8740eda1c5ffb7fe6a21095903e2722bedb8e18a247266f68db5d0e",
+    "manifest_digest": "8a0aa13e6d65dabe72d1ef0066eb9550a047252c19789eb546feac480d298701",
+    "sig": "a52ca7fc9183580d6717b2664f6fea7d3bb52803016eb48122b9451beb731ad0502c00779d6320cfb57a75b5d5cd9cac82d63142e634fbb736e94a826e78a309",
+    "counter_sig": "cc43a5b09674789c35854d2a7ba081cb6b04ed86baa7aec4c1f09ff935f3a59c0d226bf7b90707e5ddfe45c73a09b641ca8328974e6677a7503179efdc986a03",
     "counter_key": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
   }
 }

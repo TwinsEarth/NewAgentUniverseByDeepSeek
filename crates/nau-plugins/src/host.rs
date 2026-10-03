@@ -1155,6 +1155,10 @@ pub fn standard_plugins(
         Box::new(crate::plugins::chain::ChainPlugin::open(
             storage_dir.join("chain"),
         )?),
+        // The elastic-compute substrate. A skeleton at v3.5.0: it answers which runtimes
+        // this build can run and refuses the ones it cannot, with the reason. It holds
+        // the split `sandbox:create` / `sandbox:configure` pair and no policy authority.
+        Box::new(crate::plugins::ausec::AUSecPlugin::new()?),
     ])
 }
 
@@ -1234,6 +1238,10 @@ pub fn standard_declarations() -> Vec<(&'static str, &'static [Capability])> {
         (
             crate::plugins::chain::ChainPlugin::ID,
             crate::plugins::chain::ChainPlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::ausec::AUSecPlugin::ID,
+            crate::plugins::ausec::AUSecPlugin::CAPABILITIES,
         ),
     ]
 }

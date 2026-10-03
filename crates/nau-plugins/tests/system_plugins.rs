@@ -101,6 +101,7 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
         "com.twinsearth.sys.net.dht",
         "com.twinsearth.sys.net.gossip",
         "com.twinsearth.sys.chain",
+        "com.twinsearth.sys.ausec",
     ] {
         assert!(ids.contains(&expected), "{expected} is not declared");
     }
@@ -133,7 +134,7 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
     // time a plugin legitimately needed network or chain access. The map cannot be satisfied
     // by accident: a plugin that gains a capability without appearing here fails, and one
     // that appears here with the wrong capability fails too.
-    const NON_BASIC: [(&str, &[&str]); 5] = [
+    const NON_BASIC: [(&str, &[&str]); 6] = [
         // Outbound network access, which is the point of the capability model: driving an
         // HTTP client is a thing a plugin must say it does.
         ("com.twinsearth.sys.http", &["net:gossip:publish"]),
@@ -153,6 +154,18 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
         (
             "com.twinsearth.sys.sandbox",
             &["kernel:isolation:configure"],
+        ),
+        // Three, and the split is the design: AUSec may create a sandbox and may configure
+        // one, as two capabilities rather than one, so a deployment can hand out creating
+        // without handing out the ability to weaken isolation. Held together they are a
+        // privilege-escalation path -- create a weakly-isolated sandbox and run code in it.
+        (
+            "com.twinsearth.sys.ausec",
+            &[
+                "kernel:isolation:configure",
+                "sandbox:create",
+                "sandbox:configure",
+            ],
         ),
     ];
 
@@ -178,7 +191,11 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
                 }
                 // Kernel capabilities are checked as a set below; everything else must be
                 // exactly the capabilities named here -- no more, and no fewer.
-                if !caps.iter().any(|c| c.starts_with("kernel:")) {
+                //
+                // Asked of the capabilities actually held rather than of the expected
+                // strings: `is_kernel` is the predicate that decides who may hold what, and
+                // A-03's `sandbox:*` pair is kernel-class without carrying the prefix.
+                if !capabilities.iter().any(|c| c.is_kernel()) {
                     let mut got = above_basic.clone();
                     let mut want = caps.to_vec();
                     got.sort_unstable();
@@ -207,12 +224,19 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
     }
 
     // The kernel capabilities, and only where they belong.
-    const KERNEL_HOLDERS: [&str; 5] = [
+    //
+    // Membership is decided by `Capability::is_kernel`, not by the `kernel:` name prefix.
+    // The prefix was a proxy that happened to agree until A-03 named the sandbox pair
+    // `sandbox:create` / `sandbox:configure` while classifying both as kernel authority:
+    // who may hold a capability is a property of the capability, and a naming convention
+    // is not the place to record it.
+    const KERNEL_HOLDERS: [&str; 6] = [
         "com.twinsearth.sys.policy",
         "com.twinsearth.sys.blacklist",
         "com.twinsearth.sys.orchestrator",
         "com.twinsearth.sys.arbiter",
         "com.twinsearth.sys.sandbox",
+        "com.twinsearth.sys.ausec",
     ];
     for (id, capabilities) in &declarations {
         let holds_kernel = capabilities.iter().any(|c| c.is_kernel());

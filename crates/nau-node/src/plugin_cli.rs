@@ -877,9 +877,10 @@ mod tests {
         //
         // This count is a deliberate tripwire rather than a fact about the CLI: adding a
         // capability must make someone look here and confirm the table test in
-        // `nau-plugin` was updated too. It fired when `crypto:channel` was added, which
-        // is exactly what it is for.
-        assert_eq!(Capability::ALL.len(), 17);
+        // `nau-plugin` was updated too. It fired when `crypto:channel` was added, and
+        // again for A-03's `sandbox:create` / `sandbox:configure`, which is exactly what
+        // it is for.
+        assert_eq!(Capability::ALL.len(), 19);
         assert_eq!(Tier::LOADABLE.len(), 4);
         assert_eq!(Tier::ALL.len(), 5);
     }

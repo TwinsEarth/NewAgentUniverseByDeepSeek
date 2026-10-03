@@ -26,6 +26,7 @@
 
 pub mod arbiter;
 pub mod attest;
+pub mod ausec;
 pub mod blacklist;
 pub mod chain;
 pub mod erasure;

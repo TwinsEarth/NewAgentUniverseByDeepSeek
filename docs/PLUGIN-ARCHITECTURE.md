@@ -128,6 +128,15 @@
 | 经济与智能体 | `economy:settle`、`agent:card:create`、`agent:card:update`、`swarm:consensus` | ✓ | 声明式 | 审批 | **拒绝** |
 | 端到端信道 | `crypto:channel`（宿主读不到的信道） | ✓ | 审批 | 审批 | **拒绝** |
 | 内核 | `kernel:plugin:manage`、`kernel:policy:write`、`kernel:isolation:configure` | ✓ | **拒绝** | **拒绝** | **拒绝** |
+| 沙盒基础设施 | `sandbox:create`、`sandbox:configure` | ✓ | **拒绝** | **拒绝** | **拒绝** |
+
+**沙盒能力为什么是两个而不是一个**（v3.5.0 / A-03 引入）：`sandbox:create` 与
+`sandbox:configure` 合在一起是一条提权路径——能创建沙盒**并且**能选隔离参数的持有者，
+可以创建一个弱隔离的沙盒并在里面跑代码，一个动作就把隔离保证绕过去了。拆开之后，创建是
+日常操作，**配置才是需要多看一眼的那一步**，且部署可以把两者交给不同的持有者。
+两者虽然以 `sandbox:` 开头，但都属于**内核级**（`Capability::is_kernel`）：谁能决定另一个
+插件被隔离得多严，谁就握有隔离保证本身，因此任何可下载的层级都不得持有。
+详细设计见 [`crates/nau-plugins/src/plugins/ausec.rs`](../crates/nau-plugins/src/plugins/ausec.rs)。
 
 **审批**：T0 宿主自动批准；T1 官方团队批准；T2 认证委员会批准；T3 **用户显式确认**（安装时警告 + 提权清单）。
 未获批准的能力在总线入口被拒绝，并记一次违规；**违规累计 3 次 → QUARANTINED**。

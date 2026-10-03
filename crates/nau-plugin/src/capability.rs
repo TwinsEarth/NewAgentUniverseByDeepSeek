@@ -135,13 +135,28 @@ pub enum Capability {
     KernelPolicyWrite,
     /// Configure isolation.
     KernelIsolationConfigure,
+
+    // ---- sandbox infrastructure (AUSec, v3.5.0) ----------------------
+    /// Create a sandbox.
+    ///
+    /// Split from [`Capability::SandboxConfigure`] deliberately. Together they are a
+    /// privilege-escalation path: whatever can create a sandbox *and* choose its
+    /// isolation parameters can create a weakly-isolated one and run code in it. Held
+    /// apart, creating is routine and configuring is the step worth a second look.
+    SandboxCreate,
+    /// Choose a sandbox's isolation parameters.
+    ///
+    /// The narrower half of the pair above, and the one a caller should have to justify.
+    /// A plugin that can create sandboxes but not configure them cannot weaken the
+    /// isolation of the ones it makes.
+    SandboxConfigure,
 }
 
 impl Capability {
     /// Every capability.
     ///
     /// Exhaustive on purpose; see the type's documentation.
-    pub const ALL: [Capability; 17] = [
+    pub const ALL: [Capability; 19] = [
         Capability::LifecycleRead,
         Capability::MessageSend,
         Capability::StorageOwn,
@@ -159,6 +174,8 @@ impl Capability {
         Capability::KernelPluginManage,
         Capability::KernelPolicyWrite,
         Capability::KernelIsolationConfigure,
+        Capability::SandboxCreate,
+        Capability::SandboxConfigure,
     ];
 
     /// The three capabilities every plugin holds.
@@ -189,6 +206,8 @@ impl Capability {
             Capability::KernelPluginManage => "kernel:plugin:manage",
             Capability::KernelPolicyWrite => "kernel:policy:write",
             Capability::KernelIsolationConfigure => "kernel:isolation:configure",
+            Capability::SandboxCreate => "sandbox:create",
+            Capability::SandboxConfigure => "sandbox:configure",
         }
     }
 
@@ -223,6 +242,12 @@ impl Capability {
     }
 
     /// Whether holding this capability implies authority over the kernel itself.
+    ///
+    /// The two sandbox capabilities are kernel-class even though their wire names begin
+    /// with `sandbox:` rather than `kernel:`. What decides it is who may hold them: a
+    /// capability that chooses how strongly another plugin is isolated is authority over
+    /// the isolation guarantee itself, and granting it to a non-system tier would let a
+    /// downloadable plugin weaken the boundary it runs inside.
     #[must_use]
     pub fn is_kernel(self) -> bool {
         matches!(
@@ -230,6 +255,8 @@ impl Capability {
             Capability::KernelPluginManage
                 | Capability::KernelPolicyWrite
                 | Capability::KernelIsolationConfigure
+                | Capability::SandboxCreate
+                | Capability::SandboxConfigure
         )
     }
 
@@ -554,7 +581,15 @@ mod tests {
                 }
             }
         }
-        assert_eq!(Capability::ALL.len(), 17);
+        // The count is a tripwire, not the assertion: the loops above are what prove
+        // totality, and this line exists so that growing the capability set is a
+        // decision someone makes on purpose rather than a number that drifts.
+        //
+        // 19 as of A-03, which added `sandbox:create` and `sandbox:configure`. Both are
+        // kernel-class (see `is_kernel`), so the third-party refusal test below covers
+        // them without being touched -- which is the point of asserting the cross
+        // product instead of listing examples.
+        assert_eq!(Capability::ALL.len(), 19);
     }
 
     #[test]

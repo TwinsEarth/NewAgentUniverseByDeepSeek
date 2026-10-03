@@ -301,6 +301,25 @@ fn two_sandboxes_get_separate_working_directories() {
     cleanup(&root);
 }
 
+/// Whether two spellings name the same Windows directory.
+///
+/// `Path::canonicalize` returns the extended-length `\\?\` form while a child process
+/// reports its working directory without it, so comparing them literally fails on the
+/// same directory. Which form each call produces changed between the pinned 1.85.0
+/// toolchain and a newer default one, which is how this surfaced: the test passed under
+/// the MSRV the gates run and failed under Rust 1.98.1, with the child in the correct
+/// directory in both cases.
+fn same_dir(a: &str, b: &str) -> bool {
+    fn strip(s: &str) -> &str {
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            rest
+        } else {
+            s
+        }
+    }
+    strip(a.trim()).eq_ignore_ascii_case(strip(b.trim()))
+}
+
 /// The child's `current_dir` is the sandbox directory, under a root fixed at
 /// process start — not the daemon's own working directory.
 #[test]
@@ -316,13 +335,23 @@ fn the_child_runs_inside_its_sandbox_directory() {
         .join(&id)
         .display()
         .to_string();
+    let reported = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("PWD "))
+        .unwrap_or("")
+        .trim()
+        .to_string();
     assert!(
-        stdout.contains(&format!("PWD {expected}")),
+        !reported.is_empty(),
+        "the worker must print its working directory:\n{stdout}"
+    );
+    assert!(
+        same_dir(&reported, &expected),
         "the child's working directory must be its sandbox:\n{stdout}\nexpected {expected}"
     );
     let daemon_cwd = std::env::current_dir().expect("daemon cwd");
     assert!(
-        !stdout.contains(&format!("PWD {}", daemon_cwd.display())),
+        !same_dir(&reported, &daemon_cwd.display().to_string()),
         "the child must not run in the test process's own directory:\n{stdout}"
     );
     let _ = mgr.destroy("alice", &id);

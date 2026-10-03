@@ -1,0 +1,152 @@
+三项都已核实完毕。
+
+# DeepSeek Harness 插件：安装包 · 安装链接 · 安装代码
+
+## 一、安装包
+
+**DSH bundle，npm 包形式**。源码在本仓库，构建产物与已发布的 tgz **逐字节相同**。
+
+| | |
+|---|---|
+| 包名 | `@twinsearth/nau-dsh-plugin` |
+| 版本 | **3.4.5** |
+| 文件名 | `twinsearth-nau-dsh-plugin-3.4.5.tgz` |
+| 大小 | **5,696 B** |
+| sha256 | `BE08A2B9083DECF8E13D90193E86593EF9751D76631FC0C2C5694D81C182620F` |
+| 源码 | [`integrations/dsh/`](NewAgentUniverseByDeepSeek/integrations/dsh) |
+
+**包内 5 个文件**（`files` 字段声明为 `lib, cordis.patch.yml, README.md`）：
+
+```
+package/lib/index.js         624 B   ← 刻意留空的入口（见下）
+package/lib/tools.js      10,124 B   ← 真正的 Cordis 插件（apply + inject）
+package/cordis.patch.yml     910 B   ← insert 补丁，显式指定挂载 /tools
+package/package.json       1,663 B
+package/README.md          2,873 B
+```
+
+**装载路径一处值得说明**：`lib/index.js` 是**故意留空**的。文件头注释写明了原因——profile 挂载的是 `tools` 子路径（由 `cordis.patch.yml` 的 `insert` **显式指定**），这样**读 profile 就知道包的哪个模块成为插件**，不必依赖「根导出即插件」的约定。空文件存在只为避免 manifest 指向不存在的文件时报解析错误。
+
+**它提供 5 个只读工具**（实测注册数 = 5，与 README 一致）：
+
+```
+nau_version    nau_inspect    nau_conformance    nau_amount    nau_node_status
+```
+
+## 二、安装链接
+
+全部**实测过**（尺寸与 sha256 都与本地逐字节比对）：
+
+| 渠道 | 链接 | 状态 |
+|---|---|---|
+| **npmjs（推荐，公开免凭据）** | [`npmjs.com/package/@twinsearth/nau-dsh-plugin`](https://www.npmjs.com/package/@twinsearth/nau-dsh-plugin) | ? |
+| └ tarball 直链 | `https://registry.npmjs.org/@twinsearth/nau-dsh-plugin/-/nau-dsh-plugin-3.4.5.tgz` | **200**，5,696 B，**逐字节一致** |
+| **GitHub Release 资产** | `https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/releases/download/v3.4.5/twinsearth-nau-dsh-plugin-3.4.5.tgz` | **200**，5,696 B，**逐字节一致** |
+| └ Release 页面 | [`releases/tag/v3.4.5`](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/releases/tag/v3.4.5) | ? |
+| **GitHub Packages** | [`/packages`](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/packages) | 需凭据（匿名 401，我的 PAT 无 `read:packages` 故 403） |
+| **源码** | [`tree/main/integrations/dsh`](https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/tree/main/integrations/dsh) | ? |
+
+## 三、安装代码
+
+### 1. 标准方式（harness 自带命令）
+
+语法是**从 harness 自己的文本里查实的**，不是我记忆里的：
+
+```sh
+dsh plugin --profile <profile-name> add @twinsearth/nau-dsh-plugin
+```
+
+带版本锁定：
+
+```sh
+dsh plugin --profile <profile-name> add @twinsearth/nau-dsh-plugin@3.4.5
+```
+
+harness 明确支持**四种来源**：包名（可带版本）、Git 地址、tarball、本地绝对路径。
+
+### 2. 手工方式（我实测跑通的就是这条）
+
+`dsh plugin add` 本质是转发给 pnpm，所以等价操作是两步：
+
+```sh
+# 步骤 1：在 profile 目录安装
+cd ~/.dsh/profiles/<profile-name>
+pnpm add @twinsearth/nau-dsh-plugin@3.4.5
+
+# 步骤 2：把它加进 profile 的 bundle 列表
+#   编辑同目录的 package.json：
+#   "dsh": { "profile": { "bundles": [
+#       "@deepseek-ai/dsh-base",
+#       "@deepseek-ai/dsh-web-app",
+#       "@twinsearth/nau-dsh-plugin"     ← 加这一行
+#   ] } }
+```
+
+**实测结果**（全新 profile，从 npm 装）：
+
+```
++ @twinsearth/nau-dsh-plugin 3.4.5        22 packages
+Added 1 entry to minimumReleaseAgeExclude in pnpm-workspace.yaml
+Done in 4s using pnpm v11.7.0
+```
+
+最后那行是 harness 的**供应链策略**（`minimumReleaseAge` 拦截新发布的包），安装器会自动加豁免条目——**这是设计行为，不是故障**。
+
+### 3. 离线 / tarball 安装
+
+```sh
+# 下载
+curl -LO https://github.com/TwinsEarth/NewAgentUniverseByDeepSeek/releases/download/v3.4.5/twinsearth-nau-dsh-plugin-3.4.5.tgz
+
+# 校验（应得到 BE08A2B9…620F）
+sha256sum twinsearth-nau-dsh-plugin-3.4.5.tgz
+
+# 安装
+dsh plugin --profile <profile-name> add /abs/path/to/twinsearth-nau-dsh-plugin-3.4.5.tgz
+```
+
+### 4. 从 GitHub Packages 安装（需凭据）
+
+GitHub Packages **即使公开包也要求认证**。先在 `~/.npmrc` 写入：
+
+```
+@twinsearth:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<你的-token>
+```
+
+token 需有 `read:packages`。然后：
+
+```sh
+dsh plugin --profile <profile-name> add @twinsearth/nau-dsh-plugin@3.4.5
+```
+
+### 5. 验证安装成功
+
+装完不该只看「有没有报错」。因为**装得上不代表加载得起来**——这个包当初就踩过这个坑（依赖写成 peer-only，装完 import 失败）：
+
+```sh
+cd ~/.dsh/profiles/<profile-name>
+node -e "
+const p = require('@twinsearth/nau-dsh-plugin/tools');
+console.log('inject:', p.inject, '| apply:', typeof p.apply);
+const r = []; p.apply({tools:{register:t=>r.push(t)}}, {bin:'nau'});
+console.log('registered tools:', r.length);
+"
+```
+
+期望输出：
+
+```
+inject: [ 'tools' ] | apply: function
+registered tools: 5
+```
+
+**注意入口是 `/tools` 而不是包根**——包根 `lib/index.js` 是刻意留空的（原因见上）。
+
+---
+
+**我实际验证到哪一步**：全新 profile → 从 npmjs 安装 → import → `apply()` → 注册 5 个工具 → `execute()` 按 schema 校验参数（拒绝缺失字段，证明是真接线而非桩）。**已验证** ?
+
+**未验证**：在**运行中的 harness 会话里**看见这 5 个工具。`dsh plugin` 只转发给 pnpm，没有查询挂载状态的命令，要确认得启动 app 看。**这一步我没做，不作声称。**
+
+需要我把这份说明写进 [`integrations/dsh/README.md`](NewAgentUniverseByDeepSeek/integrations/dsh/README.md) 吗？那是本仓库内的写入。

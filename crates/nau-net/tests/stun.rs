@@ -247,14 +247,31 @@ async fn a_probe_of_a_closed_port_times_out_rather_than_hanging_or_succeeding() 
     // Nothing is bound. Some platforms report an ICMP port-unreachable as
     // ECONNRESET on the next socket call; the implementation must treat that as
     // "this attempt failed" and end in a typed timeout.
-    let addr = free_port().await;
+    //
+    // `free_port` releases the port before the probe, and nine tests in this binary run in
+    // parallel, so another test's server can bind the released port in the gap and answer.
+    // A reply therefore means the port was taken rather than that the timeout path is
+    // broken, and the attempt is retried on a fresh port. Only a probe answered on every
+    // attempt fails here, which is what a real defect would look like -- a stray neighbour
+    // can win the race once, not five times running.
     let budget = Duration::from_millis(300);
-    let started = Instant::now();
-    match binding_request(addr, budget).await {
-        Err(StunError::Timeout { .. }) => {}
-        other => panic!("expected a typed timeout, got {other:?}"),
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let addr = free_port().await;
+        let started = Instant::now();
+        match binding_request(addr, budget).await {
+            Err(StunError::Timeout { .. }) => {
+                assert!(started.elapsed() < budget + Duration::from_secs(2));
+                return;
+            }
+            other => assert!(
+                attempts < 5,
+                "expected a typed timeout from a closed port, got {other:?} on all \
+                 {attempts} attempts"
+            ),
+        }
     }
-    assert!(started.elapsed() < budget + Duration::from_secs(2));
 }
 
 #[tokio::test]

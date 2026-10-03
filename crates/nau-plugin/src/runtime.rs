@@ -51,12 +51,31 @@ pub enum RuntimeKind {
     Process,
     /// In a WASM instance. Not present in this build.
     Wasm,
+    /// In a microVM (Firecracker-class hypervisor isolation).
+    ///
+    /// Declared so a manifest can ask for it and be **refused with a reason**; no
+    /// backend exists in this build. See [`RuntimeKind::unavailability`].
+    MicroVm,
+    /// In a full virtual machine, able to run a complete operating system.
+    ///
+    /// Declared for the same reason as [`RuntimeKind::MicroVm`]: the vocabulary comes
+    /// before the implementation, so that asking for it fails loudly instead of
+    /// silently selecting something weaker.
+    FullVm,
 }
 
 impl RuntimeKind {
     /// Every kind.
-    pub const ALL: [RuntimeKind; 3] =
-        [RuntimeKind::Native, RuntimeKind::Process, RuntimeKind::Wasm];
+    ///
+    /// Exhaustive: adding a variant breaks this array and the label-uniqueness test,
+    /// so a new runtime cannot be introduced without naming it.
+    pub const ALL: [RuntimeKind; 5] = [
+        RuntimeKind::Native,
+        RuntimeKind::Process,
+        RuntimeKind::Wasm,
+        RuntimeKind::MicroVm,
+        RuntimeKind::FullVm,
+    ];
 
     /// A stable label.
     #[must_use]
@@ -65,13 +84,44 @@ impl RuntimeKind {
             RuntimeKind::Native => "native",
             RuntimeKind::Process => "process",
             RuntimeKind::Wasm => "wasm",
+            RuntimeKind::MicroVm => "micro_vm",
+            RuntimeKind::FullVm => "full_vm",
+        }
+    }
+
+    /// Why this runtime cannot be used here, or `None` when it can.
+    ///
+    /// The reason is part of the API rather than an internal detail: a manifest that
+    /// asks for a runtime this build lacks must be refused **with the reason**, because
+    /// silently running it on a weaker runtime would make the manifest's isolation
+    /// claim false. `MicroVm` and `FullVm` are Linux-only by construction — they need a
+    /// hypervisor — so on Windows and macOS they can never be available, and saying so
+    /// is the whole point of declaring them.
+    #[must_use]
+    pub fn unavailability(self) -> Option<&'static str> {
+        match self {
+            RuntimeKind::Native | RuntimeKind::Process => None,
+            RuntimeKind::Wasm => Some(
+                "the WASM runtime is an optional feature that is not present in this build; \
+                 asking for it is refused rather than downgraded",
+            ),
+            RuntimeKind::MicroVm => Some(
+                "MicroVm needs a hypervisor (Firecracker-class, KVM on Linux) and no backend \
+                 exists in this build; it is Linux-only by construction, so on Windows and \
+                 macOS it is never available and is refused with this reason",
+            ),
+            RuntimeKind::FullVm => Some(
+                "FullVm needs a hypervisor able to boot a complete operating system and no \
+                 backend exists in this build; it is Linux-only by construction, so on Windows \
+                 and macOS it is never available and is refused with this reason",
+            ),
         }
     }
 
     /// Whether this build contains the runtime at all.
     #[must_use]
     pub fn is_available(self) -> bool {
-        !matches!(self, RuntimeKind::Wasm)
+        self.unavailability().is_none()
     }
 }
 
@@ -101,6 +151,33 @@ pub enum Boundary {
     EnvAllowlist,
     /// Giving the plugin a working directory of its own.
     WorkDirIsolation,
+    /// A page cache shared with other instances on this host, mapped **read-only**.
+    ///
+    /// Separate from [`Boundary::Memory`] on purpose. Memory says "how much"; this says
+    /// "shared, and the sharing is only safe because a writer cannot exist". A host that
+    /// maps one page into several tenants and lets any of them write it has not saved
+    /// memory, it has created a cross-tenant write primitive — so a runtime that cannot
+    /// prove the read-only mapping must say so rather than accept the optimisation.
+    PmemSharedReadOnly,
+    /// Filtering the ioctl set a sandbox may reach.
+    ///
+    /// Some ioctls move data between files by block address rather than by path, so a
+    /// permission check on the path never sees them. `XFS_IOC_SWAPEXT` is the concrete
+    /// case: it exchanges two files' extents, which is how a sandboxed process can read
+    /// a file it was never granted access to.
+    IoctlFilter,
+    /// An **allowlist** for outbound traffic, as opposed to [`Boundary::NetworkDeny`].
+    ///
+    /// Deny is all-or-nothing. An allowlist is the weaker-sounding but stricter-typed
+    /// claim: "may reach exactly these host/port/protocol triples" is checkable, while
+    /// "has network access" is not.
+    NetworkEgressAllowlist,
+    /// Which scheduling class the plugin's CPU time is accounted to.
+    ///
+    /// Two classes are defined: latency-sensitive, which is guaranteed service, and
+    /// latency-tolerant, which runs on what is left. The inverse — every plugin equally
+    /// important — is what makes a tail-latency claim unmeasurable.
+    PriorityClass,
 }
 
 impl Boundary {
@@ -108,7 +185,7 @@ impl Boundary {
     ///
     /// Exhaustive: adding a variant breaks this array and the totality test, so a new
     /// boundary cannot be introduced without declaring who enforces it.
-    pub const ALL: [Boundary; 11] = [
+    pub const ALL: [Boundary; 15] = [
         Boundary::Timeout,
         Boundary::Memory,
         Boundary::ProcessCount,
@@ -120,6 +197,10 @@ impl Boundary {
         Boundary::FilesystemConfinement,
         Boundary::EnvAllowlist,
         Boundary::WorkDirIsolation,
+        Boundary::PmemSharedReadOnly,
+        Boundary::IoctlFilter,
+        Boundary::NetworkEgressAllowlist,
+        Boundary::PriorityClass,
     ];
 
     /// The key a manifest uses to waive this boundary.
@@ -137,6 +218,10 @@ impl Boundary {
             Boundary::FilesystemConfinement => "filesystem_confinement",
             Boundary::EnvAllowlist => "env_allowlist",
             Boundary::WorkDirIsolation => "work_dir_isolation",
+            Boundary::PmemSharedReadOnly => "pmem_shared_read_only",
+            Boundary::IoctlFilter => "ioctl_filter",
+            Boundary::NetworkEgressAllowlist => "network_egress_allowlist",
+            Boundary::PriorityClass => "priority_class",
         }
     }
 
@@ -155,6 +240,10 @@ impl Boundary {
             Boundary::FilesystemConfinement => "filesystem_confinement",
             Boundary::EnvAllowlist => "env_allowlist",
             Boundary::WorkDirIsolation => "work_dir_isolation",
+            Boundary::PmemSharedReadOnly => "pmem_shared_read_only",
+            Boundary::IoctlFilter => "ioctl_filter",
+            Boundary::NetworkEgressAllowlist => "network_egress_allowlist",
+            Boundary::PriorityClass => "priority_class",
         }
     }
 }
@@ -317,6 +406,32 @@ fn process_capabilities() -> RuntimeCapabilities {
     unenforced_reasons.insert(
         Boundary::OpenFileLimit,
         "handle caps are only enforced by `setrlimit` on Unix, not on Windows".to_string(),
+    );
+    unenforced_reasons.insert(
+        Boundary::PmemSharedReadOnly,
+        "the process runtime shares no page cache between instances: each plugin gets its own \
+         process and its own private pages, so there is nothing to map read-only and nothing to \
+         protect from a writing neighbour"
+            .to_string(),
+    );
+    unenforced_reasons.insert(
+        Boundary::IoctlFilter,
+        "filtering ioctls needs `seccomp` on Linux or an equivalent filter on Windows, and \
+         neither a Win32 Job Object nor a plain Unix child provides one; a path-based permission \
+         check does not see an ioctl that moves data by block address"
+            .to_string(),
+    );
+    unenforced_reasons.insert(
+        Boundary::NetworkEgressAllowlist,
+        "an allowlist is a refinement of `network`, and the process runtime has no egress \
+         primitive at all — so it can enforce neither the deny nor the allowlist form"
+            .to_string(),
+    );
+    unenforced_reasons.insert(
+        Boundary::PriorityClass,
+        "children start at the host's default scheduling priority; this build has no scheduler \
+         integration, so a latency-sensitive claim cannot be made about a process plugin here"
+            .to_string(),
     );
     debug_assert_eq!(
         enforced.len() + unenforced_reasons.len(),
@@ -716,11 +831,30 @@ mod tests {
         // The declaration must be total: a boundary that is neither is one the
         // refusal message cannot name, which is how a boundary silently stops being
         // enforced.
-        for kind in [RuntimeKind::Native, RuntimeKind::Process, RuntimeKind::Wasm] {
+        //
+        // Iterating `RuntimeKind::ALL` rather than a hand-written list is the point. A
+        // new runtime kind must be classified here, and `MicroVm`/`FullVm` are
+        // classified as *declared but unavailable, with a reason* rather than skipped:
+        // the vocabulary exists so a manifest can ask and be refused, so the assertion
+        // that matters for them is that the refusal is typed and readable.
+        for kind in RuntimeKind::ALL {
             let caps = match kind {
                 RuntimeKind::Native => NativeRuntime::new().declares().clone(),
                 RuntimeKind::Process => ProcessRuntime::new().declares().clone(),
                 RuntimeKind::Wasm => WasmRuntime::new().declares().clone(),
+                RuntimeKind::MicroVm | RuntimeKind::FullVm => {
+                    assert!(
+                        !kind.is_available(),
+                        "{kind:?} has no backend in this build and must not report itself \
+                         available"
+                    );
+                    let why = kind.unavailability();
+                    assert!(
+                        why.is_some_and(|w| w.contains("hypervisor")),
+                        "{kind:?} must name the missing hypervisor in its refusal, got {why:?}"
+                    );
+                    continue;
+                }
             };
             for boundary in Boundary::ALL {
                 let enforced = caps.enforces(boundary);
@@ -733,6 +867,53 @@ mod tests {
             }
             assert_eq!(caps.kind, kind);
         }
+    }
+
+    #[test]
+    fn the_hypervisor_kinds_are_declared_and_unavailable_everywhere() {
+        // A-01's acceptance criterion. Declaring a runtime this build cannot provide is
+        // only safe if asking for it always fails, on every platform, with a reason a
+        // reader can act on -- otherwise the fallback is to run the plugin somewhere
+        // weaker while the manifest still claims microVM isolation.
+        for kind in [RuntimeKind::MicroVm, RuntimeKind::FullVm] {
+            assert!(!kind.is_available(), "{kind:?} must not be available");
+            let why = kind
+                .unavailability()
+                .unwrap_or_else(|| panic!("{kind:?} must explain why it is unavailable"));
+            assert!(
+                why.contains("Linux-only"),
+                "{kind:?} must say it is Linux-only, got: {why}"
+            );
+            assert!(
+                why.contains("refused"),
+                "{kind:?} must say the request is refused rather than downgraded, got: {why}"
+            );
+        }
+        // The two implemented kinds stay available; this is the "do not regress" half.
+        assert!(RuntimeKind::Native.is_available());
+        assert!(RuntimeKind::Process.is_available());
+    }
+
+    #[test]
+    fn the_new_boundaries_have_distinct_waiver_keys() {
+        // Each of A-02's boundaries is waivable, and a waiver is only meaningful if the
+        // key it is filed under identifies exactly one boundary -- two boundaries
+        // sharing a key would let one manifest reason silently excuse the other.
+        for boundary in [
+            Boundary::PmemSharedReadOnly,
+            Boundary::IoctlFilter,
+            Boundary::NetworkEgressAllowlist,
+            Boundary::PriorityClass,
+        ] {
+            let key = boundary.waiver_key();
+            assert!(!key.is_empty(), "{boundary:?} needs a waiver key");
+            let sharing = Boundary::ALL
+                .into_iter()
+                .filter(|b| b.waiver_key() == key)
+                .count();
+            assert_eq!(sharing, 1, "`{key}` must identify exactly one boundary");
+        }
+        assert_eq!(Boundary::ALL.len(), 15, "A-02 defines four new boundaries");
     }
 
     #[test]

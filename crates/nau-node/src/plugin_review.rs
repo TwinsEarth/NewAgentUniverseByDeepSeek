@@ -1825,6 +1825,9 @@ mod tests {
 
     use ed25519_dalek::{Signer, SigningKey};
     use nau_plugin::manifest::{CapabilitySection, Limits, PluginSection, SignatureSection};
+    // `declares()` is a `PluginRuntime` method, and the waiver fixture below derives its
+    // keys from the runtime's own declaration instead of a hand-written list.
+    use nau_plugin::runtime::PluginRuntime;
     use sha2::Digest;
 
     const NOW: u64 = 1_750_000_000;
@@ -1848,16 +1851,24 @@ mod tests {
         }
     }
 
-    /// Every boundary the process runtime cannot enforce, waived with a reason — the
-    /// set the arbiter's own tests use for a loadable third-party plugin.
+    /// Every boundary the process runtime cannot enforce, waived with a reason.
+    ///
+    /// Derived from the runtime rather than listed literally. This function used to hold a
+    /// copy of the arbiter's five keys, with a comment saying it was "the set the arbiter's
+    /// own tests use" -- so A-02's four new boundaries made both copies incomplete at once,
+    /// and five review-pipeline tests failed while the pipeline itself was correct.
     fn waivers() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("network", "test: no egress primitive"),
-            ("filesystem_confinement", "test: no confinement primitive"),
-            ("disk_bytes", "test: no quota primitive"),
-            ("cpu_ms", "test: no cpu primitive"),
-            ("max_open_files", "test: no handle cap"),
-        ]
+        ProcessRuntime::new()
+            .declares()
+            .unenforced()
+            .into_iter()
+            .map(|(boundary, _why)| {
+                (
+                    boundary.waiver_key(),
+                    "test: accepted for this fixture, the boundary is not under test here",
+                )
+            })
+            .collect()
     }
 
     /// A signed third-party manifest whose module digest covers [`module`].

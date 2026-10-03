@@ -913,14 +913,25 @@ mod tests {
         serde_json::to_string(&m).expect("serialise")
     }
 
+    /// Every boundary the process runtime leaves unenforced, waived with a test reason.
+    ///
+    /// Derived from the runtime's own declaration rather than a hand-written list. The
+    /// previous version named five keys literally; A-02 added four boundaries, and that
+    /// list silently became incomplete, so every arbiter test failed with
+    /// `IsolationNotEnforceable` while the code under test was correct. A fixture that
+    /// asks the runtime what it lacks cannot go stale when the runtime changes.
     fn waivers() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("network", "test: no egress primitive"),
-            ("filesystem_confinement", "test: no confinement primitive"),
-            ("disk_bytes", "test: no quota primitive"),
-            ("cpu_ms", "test: no cpu primitive"),
-            ("max_open_files", "test: no handle cap"),
-        ]
+        let declared = ProcessRuntime::new();
+        let caps = declared.declares();
+        caps.unenforced()
+            .into_iter()
+            .map(|(boundary, _why)| {
+                (
+                    boundary.waiver_key(),
+                    "test: accepted for this fixture, the boundary is not under test here",
+                )
+            })
+            .collect()
     }
 
     fn arbiter(trust: TrustStore) -> Arbiter {

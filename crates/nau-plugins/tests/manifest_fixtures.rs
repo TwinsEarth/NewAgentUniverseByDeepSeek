@@ -511,19 +511,19 @@ fn the_documented_manifest_digests_are_the_ones_the_fixtures_have() {
     let documented: [(&str, &str); 4] = [
         (
             "official-market.json",
-            "34e194fb1db2195af5f82b2c2754ad44691980cce1bc0c8fb6c0fefecf5eda65",
+            "34be10c63b40f9fc129a35e7ea1483e21b7b5d0abff438c676a7ccaf888ee2a2",
         ),
         (
             "official-market-settle.json",
-            "a19c3532db8c5c6b7118baaa81651f68138720ecc5dd3deeb8b000610d74b58f",
+            "8a0aa13e6d65dabe72d1ef0066eb9550a047252c19789eb546feac480d298701",
         ),
         (
             "certified-analytics.json",
-            "c9c64463dae7ea726aa400959b46d479e3d0b22508daea5ed0d7359c15f1a3ab",
+            "4ce1d7fabd47a3b1bac64e86d51328eed468e030e6cd98079cdb4d8770028558",
         ),
         (
             "thirdparty-analytics.json",
-            "774cd1b421c8953f5da96e0f253c91fa16df6f74587ddc81e0efca7042fc1771",
+            "482f00bdb4063de12b496c04e82f987f4312496b8938f9aad5007073f6404b01",
         ),
     ];
     // Every drifted fixture is reported in one run rather than one per attempt: when the

@@ -138,13 +138,22 @@ fn count_dirs(root: &std::path::Path) -> usize {
 #[test]
 fn the_required_waivers_are_exactly_the_boundaries_the_backend_cannot_enforce() {
     // Reported rather than discovered one refusal at a time. A manifest author needs this
-    // list, and the test asserts what the backend actually cannot enforce -- if a sixth
+    // list, and the test asserts what the backend actually cannot enforce -- if one
     // appears, or one is silently dropped, this fails.
     //
-    // The expectation is **five, not four**, and the first version of this test said four:
-    // it was written from the four fields `nau_sandbox::Waivers` carries, which is a
-    // different question from which boundaries the process backend declines. `cpu_ms` is
-    // waivable *and* unenforced. The test is what caught the difference.
+    // The expectation is **nine as of A-02**, and the history of this number is the point
+    // of the test:
+    //   * the first version said four, written from the four fields `nau_sandbox::Waivers`
+    //     carries -- a different question from which boundaries the process backend
+    //     declines. `cpu_ms` is waivable *and* unenforced, and the test caught that.
+    //   * A-02 added `PmemSharedReadOnly`, `IoctlFilter`, `NetworkEgressAllowlist` and
+    //     `PriorityClass` to `Boundary`, and the process runtime cannot enforce any of the
+    //     four -- it shares no page cache, has no ioctl filter, has no egress primitive at
+    //     all, and does not touch scheduling. The set went from five to nine.
+    //
+    // Growing this list is a decision, not a fix: every one of the four is a boundary the
+    // process backend **cannot** enforce, so a manifest that needs one is refused rather
+    // than quietly running without it.
     let waivers = required_waivers();
     let mut keys: Vec<&str> = waivers.keys().map(String::as_str).collect();
     keys.sort_unstable();
@@ -154,8 +163,12 @@ fn the_required_waivers_are_exactly_the_boundaries_the_backend_cannot_enforce() 
             "cpu_ms",
             "disk_bytes",
             "filesystem_confinement",
+            "ioctl_filter",
             "max_open_files",
-            "network"
+            "network",
+            "network_egress_allowlist",
+            "pmem_shared_read_only",
+            "priority_class",
         ],
         "the unenforced boundary set changed; every claim that depends on it has to change too"
     );

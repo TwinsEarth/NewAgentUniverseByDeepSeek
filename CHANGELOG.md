@@ -3,6 +3,94 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.5.0] — AUSec：跨网络沙盒基础设施的**词汇表**先于实现
+
+[AUSec 开发计划](docs/DEVELOPMENT-PLAN-v3.5-v3.7-AUSec.md)把 v3.5.0–v3.7.0 分成 27 个发布。
+这是第一个。它**不分配任何资源、不共享任何内存页、不做任何调度**——它建立的是后面 26 个版本
+用来表达自己的**词汇**，理由是：一个能力如果在被实现之前无法被**请求并被拒绝**，那么它被实现
+的那天，就会先以「静默降级到更弱的隔离」的形式出现。
+
+### A-01：`RuntimeKind` 从 3 种扩到 5 种，并且「不可用」现在带原因
+
+新增 `MicroVm` 与 `FullVm`。关键在于它们**在本构建里不可用**，而这一点是 API 的一部分：
+
+```rust
+pub fn unavailability(self) -> Option<&'static str>   // 不可用时给出原因
+pub fn is_available(self) -> bool                     // = unavailability().is_none()
+```
+
+原先只有 `is_available() -> bool`，答案里没有「为什么」。把一个无法提供的运行时声明出来，
+只有在**请求它必定失败、且在每个平台上都失败、且失败信息可操作**时才是安全的——否则退路就是
+「在某个更弱的地方跑它，而清单仍然声称 microVM 隔离」。两个 hypervisor 类型是构造上
+Linux 专有的，所以在 Windows 与 macOS 上永远不可用，而**说出这一点正是声明它们的全部意义**。
+
+### A-02：`Boundary` 从 11 条扩到 15 条
+
+| 新边界 | 它把什么从散文变成了机制 |
+|---|---|
+| `PmemSharedReadOnly` | 「共享的**只读**内容」——原设计写了只读，但没说前提由什么强制 |
+| `IoctlFilter` | 按块地址搬数据、因而绕过路径检查的 ioctl（`XFS_IOC_SWAPEXT` 是具体那一个） |
+| `NetworkEgressAllowlist` | 比 `NetworkDeny` 更细的声明：能到达**哪些** host/port/protocol |
+| `PriorityClass` | 时延敏感 / 时延容忍两类，否则「尾延迟改善」无法被测量 |
+
+`PmemSharedReadOnly` 值得单独说：宿主把同一页映射进多个租户、又允许其中任何一个写它，
+那就不是省了内存，而是造了一个**跨租户写原语**。所以无法证明只读映射的运行时**必须说出来**，
+而不是接受这个优化。
+
+加这四条时，`process_capabilities()` 的 `debug_assert_eq!` 立刻要求每个运行时**表态**——
+这正是那条断言存在的理由。同一处的「不可强制边界集合」是一条**有意设置的绊线**，它按设计
+触发，把集合从 5 条改成 9 条并写下理由。
+
+### A-03：`com.twinsearth.sys.ausec` 骨架，以及**沙盒能力为什么是两个**
+
+`Capability` 新增 `sandbox:create` 与 `sandbox:configure`（17 → 19）。合并成一个
+`sandbox:manage` 是一条提权路径：能创建沙盒**并且**能选隔离参数的持有者，可以创建一个
+弱隔离的沙盒并在里面跑代码，**一个动作就把隔离保证绕过去**。拆开之后，创建是日常操作，
+**配置才是需要多看一眼的那一步**，且部署可以把两者交给不同持有者。
+
+两者以 `sandbox:` 开头，但都属于内核级（`Capability::is_kernel`）——谁能决定另一个插件被
+隔离得多严，谁就握有隔离保证本身，因此任何可下载的层级都不得持有。
+
+插件**刻意不持有 `kernel:policy:write`**：策略由策略引擎写。一个既跑沙盒、又写沙盒运行规则
+的底座就是第二条策略路径，而两条策略路径正是「检查只在其中一条上生效」的成因。有一条测试
+断言这个缺失，所以它不会被后来者当成疏漏「补上」。
+
+`backends` 这个 op 让本版本单独就有用：它报告本构建**实际能跑**哪些运行时，以及每个不能跑的
+**原因**。清单作者请求 `micro_vm` 时在这里拿到拒绝文本，而不是靠一次次失败的加载去发现。
+
+### 顺带修正的三处「测试用近似代替了真东西」
+
+| 位置 | 近似 | 改成 |
+|---|---|---|
+| `nau-sandbox` 路径比对 | 直接比字符串 | 归一化 Windows `\\?\` 前缀 |
+| `system_plugins` 内核判定 | `starts_with("kernel:")` 前缀 | `Capability::is_kernel()` |
+| STUN 闭端口探测 | 假定端口一直空闲 | 端口被邻居抢走时换一个重试 |
+
+第三条是**既有的偶发性竞态**：`free_port()` 先绑 `:0` 再释放，而同一二进制里 9 个 tokio 测试
+并行，释放出的端口可能被别的测试的服务器绑上并应答。它此前从未暴露，因为 `cargo test` 默认
+**在第一个失败的测试二进制处停止**，而它一直排在后面。
+
+### 一处方法论上的发现：本项目从未在新工具链上跑过
+
+排查上面第二条时发现 `the_child_runs_inside_its_sandbox_directory` 在默认工具链
+（Rust 1.98.1）上失败、在项目 MSRV（1.85.0）上通过。**`verify-all` 固定用 `+1.85.0`**，
+所以关卡与 CI 都不会碰到它。这不是本次改动引入的——`nau-sandbox` 只依赖 `nau-core`，
+结构上与我改的 crate 无关——但它是**门禁视野之外的一块**，值得后续决定是否让 CI 也跑一条
+较新的工具链。
+
+### 验证
+
+| | |
+|---|---|
+| Rust 测试 | **1576 passed, 0 failed**（基线 1569 + A-01/A-02 的 2 条 + AUSec 的 5 条） |
+| 关卡 | **20 passed, 0 failed, 1 skipped**（跨平台编译因缺 Linux 工具链跳过） |
+| 插件不变量 | 8/8，含 `document vocabulary matches the code (4 prefixes, 19 capabilities)`、`every SystemPlugin implementation is wired (18 found, 18 constructed and declared)` |
+| 稳定性 | 全工作区**连跑 3 次全绿** |
+| clippy / fmt | 0 警告 / 无差异 |
+
+**本版本明确未做**：镜像按需加载、内存共享、CPU 调度（v3.5.1–v3.5.8）、任何真机沙盒分配。
+Linux 专有机制一律**类型化拒绝**，不静默降级。
+
 ### B3：`sys.chain` 的离线锚点日志
 
 上游 B3 给 4 个 T0 系统插件接真实句柄。逐项核实后**我们只缺一处**：`sys.identity` 与 `sys.storage` 早已有真实句柄（后者有真的 `FileStore`），而 **`ChainPlugin` 结构体里只有 `id` 与 `grant`——连 store 都没有**，op 只有 `config`/`precheck`。

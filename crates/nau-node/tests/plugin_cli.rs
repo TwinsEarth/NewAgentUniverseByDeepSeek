@@ -59,20 +59,24 @@ fn limits() -> Limits {
 
 /// The boundaries the process runtime cannot enforce on this platform. A plugin that
 /// does not waive them is refused, which is itself asserted below.
+///
+/// Derived from the runtime's own declaration rather than listed literally. This was the
+/// third copy of the same five keys; when A-02 added four boundaries, all three copies
+/// went stale together and seven end-to-end tests here failed while the CLI was correct.
+/// Asking the runtime what it lacks cannot go stale.
 fn waivers() -> std::collections::BTreeMap<String, String> {
-    [
-        ("network", "test fixture: loopback host"),
-        (
-            "filesystem_confinement",
-            "test fixture: no confinement primitive",
-        ),
-        ("disk_bytes", "test fixture: no quota primitive"),
-        ("cpu_ms", "test fixture: no cpu primitive"),
-        ("max_open_files", "test fixture: no handle cap"),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
-    .collect()
+    use nau_plugin::runtime::PluginRuntime;
+    nau_plugin::runtime::ProcessRuntime::new()
+        .declares()
+        .unenforced()
+        .into_iter()
+        .map(|(boundary, _why)| {
+            (
+                boundary.waiver_key().to_string(),
+                "test fixture: accepted here, this boundary is not under test".to_string(),
+            )
+        })
+        .collect()
 }
 
 /// Build a fully signed official manifest.
