@@ -23,6 +23,7 @@
 
 pub mod agent;
 pub mod money;
+pub mod org;
 pub mod task;
 
 use serde::Serialize;
@@ -34,6 +35,7 @@ pub use agent::{
     AgentCard, AgentCategory, Pricing, PricingModel, PricingUnit, ReputationScore, Skill, Sla,
 };
 pub use money::{major, Money, CURRENCY, DECIMALS, MINOR_UNITS_PER_MAJOR};
+pub use org::{AgentOrg, OrgAction, OrgId, OrgMember, OrgRole, Quota};
 pub use task::{
     Bid, Dispute, DisputeOutcome, EvidenceGrade, ResultEnvelope, Task, TaskId, TaskSpec, TaskState,
     VerificationPolicy, SIX_FIELDS,
