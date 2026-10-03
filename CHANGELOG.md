@@ -3,6 +3,68 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.6.3] — 恢复不等于重启：`Paused → Running` **不重跑 `on_init`**
+
+B-05。`crates/nau-plugin/src/lifecycle.rs`——`Paused` 与 `Running` **本来就在**，
+这一版加的是**进入 `Running` 的第二条路径的语义**，不是新状态。
+
+### 边的存在从来不是问题，问题是**它意味着什么**
+
+`Paused → Running` 一直是一条合法的边。缺的是：一条**意思是「恢复」而不是「重新初始化」**的路。
+在此之前，「暂停的插件恢复」与「重新初始化一个插件」走的是同一个调用，
+**而两者对 `on_init` 的后果完全不同**。
+
+所以现在有两条路，各自只从一个状态合法：
+
+| 方法 | 边 | `on_init` |
+|---|---|---|
+| `start` | `Loaded → Running` | **跑**，并计数 |
+| `restore` | `Paused → Running` | **不跑** |
+
+而两者的**误用方向都被指名拒绝**：
+
+```
+start ... is only legal from `loaded`; this plugin is `paused`.
+A paused plugin is resumed with `restore`, which does not run `on_init`
+restore ... is only legal from `paused`; this plugin is `loaded`
+```
+
+**第二条拒绝尤其重要**：从 `Loaded` 调 `restore` 就是**一次跳过初始化的启动**——
+**同一个缺陷从另一边到达**。
+
+### 「没重跑」是指标，不是注释
+
+`Lifecycle::init_runs()` 计 `on_init` 跑了多少次。测试断言**恢复前后这个数字相同**：
+
+```rust
+let before = l.init_runs();     // 1：启动时初始化过一次
+l.restore("snap-abc", 5)?;
+assert_eq!(l.init_runs(), before);   // 恢复没有让它变成 2
+```
+
+有一条测试把两条路**并排放**：经过「启动→暂停→恢复」的与只经过「启动」的，
+**状态相同、计数相同**——所以断言的不是两条路各自的行为，而是**它们之间没有差别这件事**。
+
+而审计仍能分辨它们：恢复那条的 `because` 是 `restored from snap-abc`。
+**恢复必须说出它从什么恢复**——一条不说从哪恢复的恢复记录，
+无法回答关于恢复唯一值得问的问题，而它掩盖的缺陷是**在需要的快照丢失之后用陈旧状态恢复**。
+
+### 我又写了一个恒真断言
+
+`restore` 的第一版里有一行 `debug_assert_eq!(self.init_runs, self.init_runs)`——
+**它断言不了任何东西**，而这是本会话第二次写出这种形状的东西（第一次是 `x - x = 0`）。
+
+**删掉而不是修好**：要检查的事实是「计数在调用前后不变」，
+**只有测试看得见**；而在证据该在的地方放一句自我比较，比没有更糟，**因为它看起来像一次检查**。
+
+### 验证
+
+| | |
+|---|---|
+| `nau-plugin` 测试 | **209 条**（202 + 7 条 B-05） |
+| 覆盖的路径 | start 初始化并计数 / **restore 恢复且计数不变** / **两条路的差别在计数上**且审计可分辨 / 恢复必须指名快照 / **从错误状态恢复被拒** / **从暂停启动被拒** / `Paused↔Running` 两条边仍在 |
+| clippy · fmt | 干净 |
+
 ## [3.6.2] — 增量快照：**每一层只存一次，而且用计数证明**
 
 B-04。`crates/nau-sandbox/src/snapshot.rs`（新建）。

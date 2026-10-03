@@ -199,6 +199,12 @@ pub struct Lifecycle {
     history: Vec<Transition>,
     /// How many policy violations have been recorded. Three quarantine the plugin.
     violations: u32,
+    /// How many times `on_init` has run for this plugin.
+    ///
+    /// B-05's evidence. A restore is defined by **not** incrementing this, and a claim of that
+    /// kind needs a number to check rather than a comment to trust: the test asserts the count
+    /// before and after, so "the restore did not re-initialise" is a measurement.
+    init_runs: u32,
 }
 
 /// A plugin is quarantined after this many recorded violations.
@@ -212,6 +218,7 @@ impl Lifecycle {
             state: PluginState::Discovered,
             history: Vec::new(),
             violations: 0,
+            init_runs: 0,
         }
     }
 
@@ -231,6 +238,78 @@ impl Lifecycle {
     #[must_use]
     pub fn violations(&self) -> u32 {
         self.violations
+    }
+
+    /// How many times `on_init` has run.
+    ///
+    /// The evidence behind B-05: a restore into `Running` must leave this unchanged, and a start
+    /// must increment it. Without a number, "the restore did not re-initialise" is a claim about
+    /// code someone read rather than a fact the suite checked.
+    #[must_use]
+    pub fn init_runs(&self) -> u32 {
+        self.init_runs
+    }
+
+    /// Start a loaded plugin: `Loaded -> Running`, **initialising**.
+    ///
+    /// # Errors
+    ///
+    /// [`PluginError::Lifecycle`] when the state is not `Loaded`. Refused rather than allowed
+    /// from anywhere: `on_init` running twice is exactly the defect this pair of methods exists
+    /// to make visible, and a `start` that could be called from `Paused` would provide it.
+    pub fn start(&mut self, at: u64) -> Result<Transition> {
+        if self.state != PluginState::Loaded {
+            return Err(PluginError::Lifecycle(format!(
+                "start initialises a plugin and is only legal from `loaded`; this plugin is \
+                 `{}`. A paused plugin is resumed with `restore`, which does not run `on_init`",
+                self.state
+            )));
+        }
+        let entry = self.transition(PluginState::Running, "on_init returned", at)?;
+        self.init_runs = self.init_runs.saturating_add(1);
+        Ok(entry)
+    }
+
+    /// Resume a paused plugin from a snapshot: `Paused -> Running`, **without initialising**.
+    ///
+    /// # Errors
+    ///
+    /// [`PluginError::Lifecycle`] when the state is not `Paused`, or when `snapshot` is blank.
+    ///
+    /// The snapshot is required and must be named. A restore that did not say what it restored
+    /// from would leave an audit trail that cannot answer the only question worth asking about a
+    /// resume — *from what* — and the defect it would hide is a plugin resumed with stale state
+    /// after the snapshot it should have used was lost.
+    pub fn restore(&mut self, snapshot: &str, at: u64) -> Result<Transition> {
+        if self.state != PluginState::Paused {
+            return Err(PluginError::Lifecycle(format!(
+                "restore resumes from a snapshot and is only legal from `paused`; this plugin is \
+                 `{}`",
+                self.state
+            )));
+        }
+        if snapshot.trim().is_empty() {
+            return Err(PluginError::Lifecycle(
+                "a restore must name the snapshot it resumes from; a resume that does not say \
+                 from what cannot be audited"
+                    .into(),
+            ));
+        }
+        // `on_init` is deliberately, visibly absent here. That absence is the whole of B-05:
+        // `Paused -> Running` already existed as an edge, and what was missing was a path that
+        // means "resume" rather than "start again".
+        //
+        // The first version of this method carried a `debug_assert_eq!(self.init_runs,
+        // self.init_runs)` -- a tautology that asserted nothing, and the second one of that shape
+        // written this session. It is removed rather than fixed: the fact to check is that the
+        // count is unchanged across a call, which only a test can see, and a self-comparison
+        // sitting where the evidence should be is worse than no line at all because it looks like
+        // a check.
+        self.transition(
+            PluginState::Running,
+            &format!("restored from {snapshot}"),
+            at,
+        )
     }
 
     /// The only place `state` is assigned.
@@ -527,5 +606,137 @@ mod tests {
                 assert!(state.holds_instance(), "{state} serves but holds nothing");
             }
         }
+    }
+
+    /// A lifecycle walked to `Loaded`, which is the state `start` is legal from.
+    fn loaded() -> Lifecycle {
+        let mut l = Lifecycle::new();
+        l.transition(PluginState::Verified, "checks passed", 1)
+            .expect("verified");
+        l.transition(PluginState::Loaded, "instance created", 2)
+            .expect("loaded");
+        l
+    }
+
+    /// A lifecycle that has started once and been paused: the state a restore resumes from.
+    fn paused_after_start() -> Lifecycle {
+        let mut l = loaded();
+        l.start(3).expect("start");
+        l.transition(PluginState::Paused, "operator paused it", 4)
+            .expect("paused");
+        l
+    }
+
+    #[test]
+    fn a_start_initialises_and_is_counted() {
+        let mut l = loaded();
+        assert_eq!(l.init_runs(), 0, "nothing has been initialised yet");
+        l.start(3).expect("start");
+        assert_eq!(l.state(), PluginState::Running);
+        assert_eq!(l.init_runs(), 1);
+    }
+
+    #[test]
+    fn a_restore_resumes_without_re_initialising() {
+        // B-05's first acceptance criterion, as a measurement rather than a comment: the count
+        // before the restore and the count after it must be the same number.
+        let mut l = paused_after_start();
+        let before = l.init_runs();
+        assert_eq!(
+            before, 1,
+            "the plugin was initialised once, when it started"
+        );
+
+        l.restore("snap-abc", 5).expect("restore");
+        assert_eq!(l.state(), PluginState::Running);
+        assert_eq!(
+            l.init_runs(),
+            before,
+            "a restore must not run `on_init`; the count moved from {before} to {}",
+            l.init_runs()
+        );
+    }
+
+    #[test]
+    fn the_difference_between_start_and_restore_is_the_init_count() {
+        // The two paths into `Running` side by side. Asserting them separately would leave open
+        // the reading that `start` is also a resume; this asserts the difference itself.
+        let mut started = loaded();
+        started.start(3).expect("start");
+        started
+            .transition(PluginState::Paused, "paused", 4)
+            .expect("paused");
+        started.restore("snap-1", 5).expect("restore");
+
+        let mut restarted = loaded();
+        restarted.start(3).expect("start");
+
+        assert_eq!(started.state(), restarted.state(), "both are Running");
+        assert_eq!(started.init_runs(), 1, "started once, restored once");
+        assert_eq!(restarted.init_runs(), 1, "started once");
+        // And the history says which happened, so the audit can tell them apart even though the
+        // states agree.
+        let last = started.history().last().expect("a history");
+        assert!(
+            last.because.contains("restored from snap-1"),
+            "the audit must record what was restored from, got: {}",
+            last.because
+        );
+    }
+
+    #[test]
+    fn a_restore_says_what_it_restored_from() {
+        // A resume that does not name its snapshot cannot be audited, and the defect it hides is
+        // a plugin resumed with stale state after the snapshot it needed was lost.
+        let mut l = paused_after_start();
+        let err = l.restore("   ", 5).expect_err("must refuse");
+        assert!(
+            format!("{err}").contains("must name the snapshot"),
+            "got: {err}"
+        );
+        assert_eq!(
+            l.state(),
+            PluginState::Paused,
+            "a refused restore changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_restore_from_the_wrong_state_is_refused_and_points_at_start() {
+        // `restore` is legal only from `Paused`. Calling it from `Loaded` would be a start that
+        // skipped initialisation -- the exact defect, reached from the other side.
+        let mut l = loaded();
+        let err = l.restore("snap-1", 3).expect_err("must refuse");
+        let text = format!("{err}");
+        assert!(text.contains("only legal from `paused`"), "got: {text}");
+        assert!(
+            text.contains("loaded"),
+            "it must name the actual state, got: {text}"
+        );
+        assert_eq!(l.init_runs(), 0, "nothing ran");
+        assert_eq!(l.state(), PluginState::Loaded);
+    }
+
+    #[test]
+    fn a_start_from_paused_is_refused_and_points_at_restore() {
+        // The mirror image, and the one that would re-run `on_init` on a paused plugin.
+        let mut l = paused_after_start();
+        let err = l.start(5).expect_err("must refuse");
+        let text = format!("{err}");
+        assert!(text.contains("only legal from `loaded`"), "got: {text}");
+        assert!(
+            text.contains("restore"),
+            "the refusal must name the method that does work here, got: {text}"
+        );
+        assert_eq!(l.init_runs(), 1, "a refused start must not initialise");
+        assert_eq!(l.state(), PluginState::Paused);
+    }
+
+    #[test]
+    fn paused_to_running_is_still_an_edge_in_the_state_machine() {
+        // B-05 added a path, not an edge: `Paused -> Running` already existed. This asserts the
+        // edge is still there, so the new method cannot have narrowed the machine by accident.
+        assert!(PluginState::Paused.can_transition_to(PluginState::Running));
+        assert!(PluginState::Running.can_transition_to(PluginState::Paused));
     }
 }
