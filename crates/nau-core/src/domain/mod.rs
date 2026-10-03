@@ -22,6 +22,7 @@
 //!    enforced in [`Verifiable::verify_fresh`].
 
 pub mod agent;
+pub mod fork;
 pub mod money;
 pub mod org;
 pub mod task;
@@ -34,6 +35,7 @@ use crate::identity::{verify_payload_bound, Did, Identity, PublicKey};
 pub use agent::{
     AgentCard, AgentCategory, Pricing, PricingModel, PricingUnit, ReputationScore, Skill, Sla,
 };
+pub use fork::{classify, Fork, Step, StepEffect, Trace};
 pub use money::{major, Money, CURRENCY, DECIMALS, MINOR_UNITS_PER_MAJOR};
 pub use org::{AgentOrg, OrgAction, OrgId, OrgMember, OrgRole, Quota};
 pub use task::{

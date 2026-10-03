@@ -684,13 +684,30 @@ async function main() {
   // shutdown path there. Asserting that on Windows -- rather than skipping the check -- is the
   // same choice `nau plugin run` makes on macOS: a skip would make the platform look like one
   // where the code was never tried.
-  await check('the daemon stops its plugins when it is asked to stop', () => {
+  await check('the daemon stops its plugins when it is asked to stop', async () => {
     // The first daemon's log. Named here rather than derived, because the tag is the thing that
     // pairs a log with a run and getting it wrong would silently assert against an empty file.
-    const log = fs.existsSync(path.join(LOGS, 'daemon-boot1.log'))
-      ? fs.readFileSync(path.join(LOGS, 'daemon-boot1.log'), 'utf8')
-      : '';
-    const m = /stopped (\d+) plugin\(s\); (\d+) could not be stopped/.exec(log);
+    //
+    // Polled rather than read once, and that is a fix rather than a precaution. The line is
+    // written as part of the daemon's **graceful shutdown**, which begins after the signal is
+    // delivered -- so a single read immediately after `stopDaemon` races the write, and on a
+    // loaded CI runner it loses. It lost on the ubuntu job of v3.6.3's Client workflow while the
+    // same check passed on that release's own ubuntu job, which is what a race looks like from
+    // the outside: green, green, red, green.
+    //
+    // The bound is ten seconds and the failure message says the wait expired, so a genuine
+    // regression (the daemon never stopping its plugins) still fails and fails distinguishably
+    // from a slow write.
+    const logPath = path.join(LOGS, 'daemon-boot1.log');
+    const STOPPED = /stopped (\d+) plugin\(s\); (\d+) could not be stopped/;
+    const deadline = Date.now() + 10_000;
+    let log = '';
+    for (;;) {
+      log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+      if (STOPPED.test(log) || Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const m = STOPPED.exec(log);
     if (process.platform === 'win32') {
       assert(
         m === null,
@@ -701,7 +718,8 @@ async function main() {
     }
     assert(
       m,
-      `the daemon must report stopping its plugins; the tail of its log is: ${JSON.stringify(log.slice(-400))}`,
+      `the daemon must report stopping its plugins within 10s of being signalled; the tail of ` +
+        `its log is: ${JSON.stringify(log.slice(-400))}`,
     );
     // Compared against what this daemon booted, not a number in this file. The literal was 17 and
     // A-03 made it 18; because this branch never runs on Windows, the mismatch reached CI with a
