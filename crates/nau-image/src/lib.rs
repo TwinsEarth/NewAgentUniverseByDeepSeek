@@ -44,6 +44,7 @@ pub mod protocol;
 pub mod reader;
 pub mod remote;
 pub mod source;
+pub mod verified;
 
 pub use local::LocalSource;
 pub use peer::{ChunkServer, ChunkTransport, Loopback, PeerSource, SeedingRatio, SeedingStats};
@@ -51,10 +52,13 @@ pub use protocol::{ChunkRequest, ChunkResponse};
 pub use reader::{ChunkReader, Metrics, ReadReport};
 pub use remote::{SourceKind, UdosSource};
 pub use source::{ChunkSource, MemorySource, SourceError};
+pub use verified::{VerificationStats, VerifiedSource};
 
 // The manifest vocabulary, re-exported. It is defined in `nau-core` -- which is where it
 // belongs, as pure data -- but a caller holding a reader needs it in the same breath, and
 // making them add a second dependency to name the thing they are reading would be a
 // distinction without a purpose. The types are not redefined here; there remains exactly one
 // `ChunkDigest` in the workspace.
-pub use nau_core::image::{ChunkDigest, ChunkRef, ImageManifest};
+pub use nau_core::image::{
+    ChunkAttestation, ChunkDigest, ChunkRef, ImageManifest, SignaturePolicy,
+};

@@ -36,6 +36,10 @@ enum Outcome {
     Missing,
     Unavailable,
     Corrupt,
+    /// The chunk was there but not vouched for. A fourth outcome since A-08, distinct from
+    /// the other three because none of them describes it: the source worked, the bytes were
+    /// the ones asked for, and the chunk was not missing.
+    Unattested,
 }
 
 /// Classify one fetch, asserting the property that must hold for every source.
@@ -59,6 +63,7 @@ fn classify(source: &dyn ChunkSource, digest: &ChunkDigest) -> Outcome {
         Err(SourceError::Missing(_)) => Outcome::Missing,
         Err(SourceError::Unavailable(_)) => Outcome::Unavailable,
         Err(SourceError::Corrupt { .. }) => Outcome::Corrupt,
+        Err(SourceError::Unattested(_)) => Outcome::Unattested,
     }
 }
 
@@ -113,7 +118,9 @@ fn every_source_is_either_serving_or_refusing_and_never_lying() {
                     "only the local source holds this chunk in the fixture"
                 );
             }
-            Outcome::Missing | Outcome::Unavailable | Outcome::Corrupt => not_served += 1,
+            Outcome::Missing | Outcome::Unavailable | Outcome::Corrupt | Outcome::Unattested => {
+                not_served += 1;
+            }
         }
     }
 

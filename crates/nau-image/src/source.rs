@@ -32,6 +32,14 @@ pub enum SourceError {
     },
     /// The source itself failed.
     Unavailable(String),
+    /// The chunk has no valid attestation and the policy requires one.
+    ///
+    /// A fourth variant rather than a reuse of [`SourceError::Unavailable`], because the
+    /// three existing ones would each say something false: the source *is* available, the
+    /// bytes *are* the ones asked for, and the chunk is not missing. What is wrong is that
+    /// nobody vouched for it -- a different fact, and a caller that cannot tell it apart
+    /// will retry a request that can never succeed.
+    Unattested(String),
 }
 
 impl std::fmt::Display for SourceError {
@@ -43,6 +51,7 @@ impl std::fmt::Display for SourceError {
                 "the source returned bytes hashing to {actual}, not the requested {expected}"
             ),
             SourceError::Unavailable(why) => write!(f, "the source is unavailable: {why}"),
+            SourceError::Unattested(why) => write!(f, "the chunk is not attested: {why}"),
         }
     }
 }

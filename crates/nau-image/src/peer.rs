@@ -183,6 +183,13 @@ impl<S: ChunkSource> ChunkServer<S> {
                 self.refused.fetch_add(1, Ordering::SeqCst);
                 ChunkResponse::Refused(why)
             }
+            Err(SourceError::Unattested(why)) => {
+                // A store guarded by attestations declined this chunk. The peer *has* the
+                // bytes, so `NotFound` would be a lie and would send the requester looking
+                // for a chunk that exists; `Refused` is what happened.
+                self.refused.fetch_add(1, Ordering::SeqCst);
+                ChunkResponse::Refused(format!("this peer will not serve {why}"))
+            }
         }
     }
 

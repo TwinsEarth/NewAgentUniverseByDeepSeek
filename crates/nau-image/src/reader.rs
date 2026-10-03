@@ -216,6 +216,13 @@ impl<S: ChunkSource> ChunkReader<S> {
                  sandbox out of bytes that are not the ones that were asked for"
             )),
             SourceError::Unavailable(why) => NauError::NotFound(format!("image source: {why}")),
+            // An unattested chunk is not `NotFound`. A miss invites the caller to try another
+            // source, and trying another source would produce another unattested chunk --
+            // the refusal is about the chunk, not about where it came from, so it must not
+            // read as something a retry could fix.
+            SourceError::Unattested(why) => {
+                NauError::Unauthorized(format!("refusing an image chunk on trust grounds: {why}"))
+            }
         })?;
 
         // Belt and braces: the source is supposed to verify, but a source is exactly the

@@ -32,6 +32,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{NauError, Result};
 use crate::identity::canonical::payload_digest_hex;
 
+pub mod signing;
+
+pub use signing::{message_for, ChunkAttestation, SignaturePolicy, CHUNK_SIGNATURE_DOMAIN};
+
 /// The number of hexadecimal characters in a SHA-256 digest.
 const DIGEST_HEX_LEN: usize = 64;
 
