@@ -102,6 +102,16 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
         "com.twinsearth.sys.net.gossip",
         "com.twinsearth.sys.chain",
         "com.twinsearth.sys.ausec",
+        // C-01: the six security organisations. Listed here rather than derived from
+        // `SECURITY_PLUGINS`, because this list is what proves the catalogue and the assembly
+        // agree — deriving it from the constant the assembly uses would make the check agree by
+        // construction and catch nothing.
+        "com.twinsearth.sys.security.police",
+        "com.twinsearth.sys.security.surveillance",
+        "com.twinsearth.sys.security.audit",
+        "com.twinsearth.sys.security.registry",
+        "com.twinsearth.sys.security.report",
+        "com.twinsearth.sys.security.tribunal",
     ] {
         assert!(ids.contains(&expected), "{expected} is not declared");
     }
@@ -134,7 +144,7 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
     // time a plugin legitimately needed network or chain access. The map cannot be satisfied
     // by accident: a plugin that gains a capability without appearing here fails, and one
     // that appears here with the wrong capability fails too.
-    const NON_BASIC: [(&str, &[&str]); 6] = [
+    const NON_BASIC: [(&str, &[&str]); 10] = [
         // Outbound network access, which is the point of the capability model: driving an
         // HTTP client is a thing a plugin must say it does.
         ("com.twinsearth.sys.http", &["net:gossip:publish"]),
@@ -166,6 +176,36 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
                 "sandbox:create",
                 "sandbox:configure",
             ],
+        ),
+        // ---- C-01's four bodies that hold something above the basic set ----
+        //
+        // Four and not six, and the two absentees are the point. `surveillance` and `audit` hold
+        // **exactly** the basic set, which is a stronger statement than "they hold few
+        // capabilities": it says there is no authority above the floor that they possess at all.
+        // An observer that held one extra capability would appear here, and this table is where a
+        // reviewer would see it.
+        (
+            // It acts on a plugin's lifecycle state, and must not write the policy it enforces.
+            "com.twinsearth.sys.security.police",
+            &["kernel:plugin:manage"],
+        ),
+        (
+            // Admitting a plugin changes the plugin set; anchoring one is a different act and
+            // belongs to the reporting desk.
+            "com.twinsearth.sys.security.registry",
+            &["kernel:plugin:manage"],
+        ),
+        (
+            // The only body holding a chain write, because an unanchored report is an assertion
+            // this node makes about itself.
+            "com.twinsearth.sys.security.report",
+            &["chain:evm:write"],
+        ),
+        (
+            // It writes the blacklist and must not move a plugin: a court that executes its own
+            // sentences without the police is a court with an army.
+            "com.twinsearth.sys.security.tribunal",
+            &["kernel:policy:write"],
         ),
     ];
 
@@ -230,13 +270,19 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
     // `sandbox:create` / `sandbox:configure` while classifying both as kernel authority:
     // who may hold a capability is a property of the capability, and a naming convention
     // is not the place to record it.
-    const KERNEL_HOLDERS: [&str; 6] = [
+    const KERNEL_HOLDERS: [&str; 9] = [
         "com.twinsearth.sys.policy",
         "com.twinsearth.sys.blacklist",
         "com.twinsearth.sys.orchestrator",
         "com.twinsearth.sys.arbiter",
         "com.twinsearth.sys.sandbox",
         "com.twinsearth.sys.ausec",
+        // C-01. The police acts on a plugin, the registry admits one, and the tribunal writes
+        // policy. The two observers — surveillance and audit — are deliberately absent: a body
+        // that could act on what it observes would not be a separate body from the police.
+        "com.twinsearth.sys.security.police",
+        "com.twinsearth.sys.security.registry",
+        "com.twinsearth.sys.security.tribunal",
     ];
     for (id, capabilities) in &declarations {
         let holds_kernel = capabilities.iter().any(|c| c.is_kernel());

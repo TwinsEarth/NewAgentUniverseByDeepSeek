@@ -3,6 +3,98 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.7.0] — 六个安全组织：**六个而不是一个，因为权限集就是权力**
+
+C-01 + C-02。`crates/nau-plugins/src/plugins/security/`（六个新插件）+ 装配 + 部署检查。
+
+### 为什么是六个插件而不是一个插件的六个操作
+
+设计里有一个警察、一个监察、一个审查、一个备案、一个报案、一个审判。
+它们本可以是一个插件的六个操作，而那会是错的，理由是本工作区反复到达的那一个：
+
+> **一个插件的权限集就是它的权力。**
+
+一个持有全部六种权力的插件，就是一个**能监视、能审判、能处罚的单点**。
+拆开之后，每个机构持有它的职责所需，**而这个拆分在清单里是可见的**。
+
+### 最小权限表（验收第 ① 条）
+
+| 机构 | 持有 | **不持有** |
+|---|---|---|
+| `police` | `plugin:lifecycle:read` `plugin:message:send` `kernel:plugin:manage` | `kernel:policy:write` |
+| `surveillance` | **恰好基本三件套** | **没有任何内核权限** |
+| `audit` | **恰好基本三件套** | **没有任何内核权限** |
+| `registry` | `…` `kernel:plugin:manage` | `chain:evm:write` |
+| `report` | `…` `chain:evm:write` | `kernel:*` |
+| `tribunal` | `…` `kernel:policy:write` | `kernel:plugin:manage` |
+
+**两个关键条目**：
+
+1. **`surveillance` 与 `audit` 不持有任何内核权限**——它们**能看而不能动**。
+   **一个能隔离的监察机构，就是一个换了名字的警察**，而两者作为不同机构存在，
+   正是为了让「看」与「动」是**分开的权力**。
+2. **警察与法庭持有互补的两半**：`police` 有 `kernel:plugin:manage` 而没有 `kernel:policy:write`；
+   `tribunal` 相反。**作用于一个插件**与**作用于所有插件共同生活的规则**是不同的权力，
+   而**同时持有两者的机构可以先改法律再执行它**。
+
+### 一个真实的仓库不变量让我改了自己的设计
+
+我最初给两个观察者各只声明**两项**能力。仓库自己的测试立刻拒绝了：
+
+> `the_standard_set_is_every_documented_plugin_with_the_documented_capabilities`
+> —— 每个插件都持有**基本三件套**（`LifecycleRead` + `MessageSend` + `StorageOwn`）。
+
+**而测试是对的**：一个**观察到了什么却无法上报**的监察机构是一个没有效果的机构。
+`MessageSend` 正是它需要的。
+
+所以正确的表述不是「两项」，而是**「恰好持有基本集、且没有任何更高权限」**——
+**这是一个更强也更准确的陈述**：它说的是*高于地板的权力它一点都没有*，
+而不只是*它的权力少*。
+
+### 关卡静默停止覆盖新代码——第二次
+
+**我把六个插件放进 `security/` 子目录**，而 `check-plugin-invariants.mjs` 用
+`fs.readdirSync(pluginsDir).filter(n => n.endsWith('.rs'))`——**非递归**。
+
+于是它继续报告 **「18 found, 18 constructed and declared」**——
+一个打在看**不见的代码**上的绿勾，而这正是这个项目反复在自己的关卡里发现的失败模式。
+（第一次是 v3.5.9 的 `doc-counts` 少列了 `DEVELOPMENT-PLAN`。）
+
+**改为递归遍历后**：**「24 found, 24 constructed and declared」** ✓
+
+### 部署检查暴露的第二个设计问题
+
+我为 C-01 第 ③ 条写的部署检查，用基本读权限去调用各机构的 `capabilities`，被拒了。
+
+**检查是对的，插件是错的**：`capabilities` 是**自描述**，
+却要求各机构的专属权限才给答——**这恰好让最可能问这个问题的调用方（检查部署的人）拿不到答案**。
+
+六个插件统一改为：`capabilities` 只要基本读权限，其余操作才要该机构的专属权限。
+
+### C-02 权限映射核对
+
+原设计的权限表逐条落到**本仓库真实能力名**，落在 `security/mod.rs` 的模块文档里，
+而**由测试检验**（这是第 ② 条的要害：文档写了不算，代码里要能查）：
+
+- `kernel:plugin:manage`、`kernel:policy:write`、`chain:evm:write`、`chain:evm:read`、
+  `plugin:lifecycle:read`、`plugin:message:send`、`plugin:storage:own`、`sandbox:create`、
+  `sandbox:configure`、`kernel:isolation:configure` —— **全部是本仓库既有的能力名**。
+- 原设计的 `wasm_sha256` 与 `evidence_hash` **在本代码库里零处存在**，
+  这一点被写进了 `tribunal.rs` 的 `penalties` 操作的回答里，
+  而不是只写在文档里让人去信。
+
+### 验证
+
+| | |
+|---|---|
+| `nau-plugins` | **376 条**（350 + 26 条安全组织测试） |
+| 工作区测试 | **1833 条** |
+| 部署检查 | **32 项**（31 + 1 条六组织检查）——`6 bodies booted with the expected authorities` |
+| plugin-invariants | **24 found, 24 constructed and declared** |
+| 覆盖的路径 | 六个机构都持有基本集 / **两个观察者不持有任何内核权限** / **警察与法庭持有互补的两半** / 只有报案持有链写 / 名称唯一且在 `sys.security.` 命名空间 / 各自的最小权限与阈值 /
+**部署检查**：六个机构在运行节点里自报权限，**包括它们不持有的权限** |
+| clippy · fmt | 干净 |
+
 ## [3.6.8] — 第二条热更新路径 + 审计回放：**B 族收尾**
 
 B-10 + B-11。计划把两项都列在 v3.6.8。

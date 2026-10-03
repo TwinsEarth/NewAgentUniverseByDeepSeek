@@ -443,8 +443,9 @@ mod tests {
         let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");
         // The count is a tripwire: adding a T0 plugin must make someone look here and add it
         // to the shipped set deliberately. 18 as of A-03, which added
-        // `com.twinsearth.sys.ausec`.
-        assert_eq!(boot.names.len(), 18, "the shipped set");
+        // `com.twinsearth.sys.ausec`; 24 as of C-01, which added the six security
+        // organisations. Both times it fired, which is what it is for.
+        assert_eq!(boot.names.len(), 24, "the shipped set");
         for name in &boot.names {
             assert_eq!(boot.state(name), Some(PluginState::Running), "{name}");
         }

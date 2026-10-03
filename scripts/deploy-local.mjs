@@ -320,6 +320,62 @@ async function main() {
   // compiled-in system plugins" check exists for -- seventeen plugins were once registered,
   // tested and documented while not one of them ran -- so this is a call through the daemon's
   // HTTP surface rather than a look at a registration list.
+  // C-01's third criterion: the six security organisations are assembled into the running node.
+  //
+  // The AUSec check above proves the daemon boots its compiled-in plugins. This one proves the
+  // security namespace specifically, and it asks a question the registration list cannot answer:
+  // each body reports the authority it holds **and the authority it does not**. A body that had
+  // quietly gained a kernel capability would show it here, in the running daemon, rather than in
+  // a manifest a reviewer read once.
+  await check('the six security organisations are booted with the right authorities', async () => {
+    const EXPECTED = {
+      police: { may: ['kernel:plugin:manage'], mayNot: ['kernel:policy:write'] },
+      surveillance: { may: [], mayNot: [] },
+      audit: { may: [], mayNot: [] },
+      registry: { may: ['kernel:plugin:manage'], mayNot: ['chain:evm:write'] },
+      report: { may: ['chain:evm:write'], mayNot: ['kernel:plugin:manage'] },
+      tribunal: { may: ['kernel:policy:write'], mayNot: ['kernel:plugin:manage'] },
+    };
+    const seen = [];
+    for (const [body, expectation] of Object.entries(EXPECTED)) {
+      const r = await api('POST', `/plugins/com.twinsearth.sys.security.${body}/call`, {
+        capability: 'plugin:lifecycle:read',
+        op: 'capabilities',
+      });
+      assert(
+        r.status >= 200 && r.status < 300,
+        `security.${body} -> HTTP ${r.status}: ${r.text.slice(0, 160)}`,
+      );
+      const declares = r.json && Array.isArray(r.json.declares) ? r.json.declares : [];
+      assert(declares.length > 0, `security.${body} declares nothing`);
+      for (const cap of expectation.may) {
+        assert(
+          declares.includes(cap),
+          `security.${body} must hold ${cap}, it declares ${JSON.stringify(declares)}`,
+        );
+      }
+      for (const cap of expectation.mayNot) {
+        assert(
+          !declares.includes(cap),
+          `security.${body} must NOT hold ${cap}; the split between the bodies is the reason \
+           they are six rather than one`,
+        );
+      }
+      // The two observers hold no kernel authority at all. Asserted from the running node rather
+      // than from the source, because a body that gained one at assembly time would not show up
+      // in a source read.
+      if (body === 'surveillance' || body === 'audit') {
+        const kernel = declares.filter((c) => c.startsWith('kernel:'));
+        assert(
+          kernel.length === 0,
+          `security.${body} must watch and not act, but the running node reports ${JSON.stringify(kernel)}`,
+        );
+      }
+      seen.push(body);
+    }
+    return `${seen.length} bodies booted with the expected authorities: ${seen.join(', ')}`;
+  });
+
   await check('the AUSec plugin answers in the running node', async () => {
     const r = await api('POST', '/plugins/com.twinsearth.sys.ausec/call', {
       capability: 'sandbox:create',

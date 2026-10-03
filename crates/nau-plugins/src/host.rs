@@ -1159,6 +1159,23 @@ pub fn standard_plugins(
         // this build can run and refuses the ones it cannot, with the reason. It holds
         // the split `sandbox:create` / `sandbox:configure` pair and no policy authority.
         Box::new(crate::plugins::ausec::AUSecPlugin::new()?),
+        // ---- the six security organisations (C-01, v3.7.0) ----
+        //
+        // Six bodies rather than one, because a plugin's capability set is its authority and one
+        // plugin holding all six would be a single point that can watch, judge and punish. The
+        // split is visible in `security/mod.rs`'s table and asserted by its tests: the two
+        // observers hold no kernel authority, and the police and the tribunal hold complementary
+        // halves rather than the same one.
+        //
+        // Assembled here rather than conditionally: a body that exists in the catalogue and not in
+        // the running node is the failure the roster test was written for, and the deployment
+        // check that calls one of them over HTTP is what proves they are really booted.
+        Box::new(crate::plugins::security::PolicePlugin::new()?),
+        Box::new(crate::plugins::security::SurveillancePlugin::new()?),
+        Box::new(crate::plugins::security::AuditPlugin::new()?),
+        Box::new(crate::plugins::security::RegistryPlugin::new()?),
+        Box::new(crate::plugins::security::ReportPlugin::new()?),
+        Box::new(crate::plugins::security::TribunalPlugin::new()?),
     ])
 }
 
@@ -1242,6 +1259,35 @@ pub fn standard_declarations() -> Vec<(&'static str, &'static [Capability])> {
         (
             crate::plugins::ausec::AUSecPlugin::ID,
             crate::plugins::ausec::AUSecPlugin::CAPABILITIES,
+        ),
+        // The six security organisations, declared where they are assembled. Written out rather
+        // than derived from `SECURITY_PLUGINS`, because this function's output is what the
+        // registration check compares a token against: deriving it from the same constant the
+        // assembly uses would make the check agree with the assembly by construction and catch
+        // nothing.
+        (
+            crate::plugins::security::PolicePlugin::ID,
+            crate::plugins::security::PolicePlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::security::SurveillancePlugin::ID,
+            crate::plugins::security::SurveillancePlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::security::AuditPlugin::ID,
+            crate::plugins::security::AuditPlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::security::RegistryPlugin::ID,
+            crate::plugins::security::RegistryPlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::security::ReportPlugin::ID,
+            crate::plugins::security::ReportPlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::security::TribunalPlugin::ID,
+            crate::plugins::security::TribunalPlugin::CAPABILITIES,
         ),
     ]
 }

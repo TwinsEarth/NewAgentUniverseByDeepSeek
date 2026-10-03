@@ -321,11 +321,26 @@ const fail = (check, detail) => findings.push({ check, detail });
     notes.push('plugins crate not present; the wiring check did not run');
   } else {
     const implemented = new Map(); // type name -> file
-    for (const f of fs.readdirSync(pluginsDir).filter((n) => n.endsWith('.rs'))) {
-      if (f === 'mod.rs') continue;
-      const { prod } = splitTests(fs.readFileSync(path.join(pluginsDir, f), 'utf8'));
+    // Walked recursively, and that is a fix rather than a tidy-up. This read
+    // `fs.readdirSync(pluginsDir)` — one level, `.rs` files only — so when C-01 put the six
+    // security organisations in a `security/` subdirectory they became **invisible to the very
+    // check that exists to catch an unwired plugin**. The gate kept reporting "18 found, 18
+    // constructed and declared" while counting none of the new six: a green tick over code it
+    // could not see, which is the failure mode this project keeps finding in its own gates.
+    const pluginSources = [];
+    (function walkPlugins(dir) {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'target' || e.name === 'node_modules') continue;
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walkPlugins(p);
+        else if (e.name.endsWith('.rs') && e.name !== 'mod.rs') pluginSources.push(p);
+      }
+    })(pluginsDir);
+    for (const full of pluginSources) {
+      const rel = path.relative(pluginsDir, full);
+      const { prod } = splitTests(fs.readFileSync(full, 'utf8'));
       for (const m of prod.matchAll(/impl\s+SystemPlugin\s+for\s+(\w+)/g)) {
-        implemented.set(m[1], f);
+        implemented.set(m[1], rel);
       }
     }
 
