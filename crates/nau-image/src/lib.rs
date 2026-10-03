@@ -38,8 +38,19 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+pub mod local;
 pub mod reader;
+pub mod remote;
 pub mod source;
 
+pub use local::LocalSource;
 pub use reader::{ChunkReader, Metrics, ReadReport};
+pub use remote::{P2pSource, SourceKind, UdosSource};
 pub use source::{ChunkSource, MemorySource, SourceError};
+
+// The manifest vocabulary, re-exported. It is defined in `nau-core` -- which is where it
+// belongs, as pure data -- but a caller holding a reader needs it in the same breath, and
+// making them add a second dependency to name the thing they are reading would be a
+// distinction without a purpose. The types are not redefined here; there remains exactly one
+// `ChunkDigest` in the workspace.
+pub use nau_core::image::{ChunkDigest, ChunkRef, ImageManifest};
