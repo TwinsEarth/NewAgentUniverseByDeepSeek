@@ -3,6 +3,64 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.5.6] — 只读共享页：**一个 MicroVM 不能污染同宿主的其它 MicroVM**
+
+A-09。计划把这一条标为**全篇最重要的安全要求**：
+
+> 若 guest 能写共享页，**一个 MicroVM 会污染同宿主上所有映射该页的 MicroVM**——
+> 多租户下这是**跨租户污染**，属安全漏洞而非性能问题。
+
+原设计写了「大量相同的**只读**内容」，**但没说前提由什么强制**。
+
+### 三层强制，按强度排序
+
+| 层 | 内容 |
+|---|---|
+| **类型系统** | `attach(ReadWrite)` **被拒**；不存在能产生可写共享视图的构造路径 |
+| **平台机制** | Linux 上区域以 `PROT_READ` 映射（`mmap` → 填充 → `mprotect(PROT_READ)`）；其它平台**类型化拒绝** |
+| **能力报告** | 新增 `Capability::SharedPageReadOnly`，`check_boundary` 在未强制它的后端上拒绝请求 |
+
+**第一层在所有平台都成立**，包括这台 Windows；第二层必须在 Linux 上验证，而
+`SHARED_PAGE_SUPPORT` 明说它现在处于什么状态。
+
+### 「降级是一次性的」这件事写在代码里
+
+映射先以 `PROT_READ | PROT_WRITE` 建立、填充，然后 `mprotect` 降为 `PROT_READ`。
+此后再通过该映射写入会**触发 SIGSEGV**——**守卫是 MMU 的，不是库里的一句约定**。
+
+该模块**此后永不**以 `PROT_WRITE` 调用 `mprotect`，句柄也不暴露任何能恢复写权限的方法。
+所以「guest 不能写共享页」不是对**将来改动**的承诺，而是**不存在恢复写权限的代码路径**的结果。
+
+### 我在这一版里差点犯的错，以及编译器怎么抓到的
+
+第一版的 `platform/linux.rs` 建立映射后**立刻丢弃**——**什么也没做**。
+编译器报 `methods as_ptr and len are never used`，那就是线索。
+
+**修法不是消掉警告，而是把映射放进数据通路**：`SharedPageView` 在 Linux 上持有映射，
+`as_slice()` **从只读映射读**。所以「只读」是**数据实际流经的东西**，而不是旁边摆着的一个映射。
+
+紧接着的两个错误同样是**设计信息**，不是障碍：
+
+- `ReadOnlyMap` 不是 `Clone`，所以 `SharedPageView` 去掉了 `Clone`——
+  **克隆一个映射句柄会让两块内存 `munmap` 同一区域**。类型的能做什么**受它下面的机制约束**。
+- `ReadOnlyMap::len` 无人使用 → **删掉**，不留用不上的 API。
+
+### 验证：交叉类型检查 + **反证**
+
+| | |
+|---|---|
+| Windows 测试 | `nau-sandbox` **87 条**（含 8 条共享页） |
+| Linux 类型检查 | `cargo check --target x86_64-unknown-linux-gnu` **0 警告 0 错误** |
+| **反证** | 故意把 `linux.rs` 里 `let len: i32 = bytes.len();` 破坏后 → **exit 101，错误就在 `linux.rs`** ✓ 证明该文件**确实被编译**，不是被 `cfg` 静默跳过 |
+| fmt · clippy | 干净 |
+
+### 本版本**没有**验证什么（如实标注）
+
+`virtio-pmem` 设备呈现与 DAX 配置**在本进程、本 crate 之外**，是 hypervisor 配置。
+本模块保障的是**宿主侧映射**；guest 侧那一半本仓库没有实现。
+**本仓库的 CI 从未针对真实 KVM/virtio-pmem 设备运行过它**——GitHub runner 没有 `/dev/kvm`。
+说出来是重点：**一个从未对着机制跑过的强制声明，正是这个 crate 存在的意义所要取代的那种文档**。
+
 ## [3.5.5] — 块签名：**Hash 说字节是什么，签名说谁说的**
 
 A-08。前四版建立了「一个沙盒由什么构成」「怎么取」「从哪儿取」「谁能给你」。

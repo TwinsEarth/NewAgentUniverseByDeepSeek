@@ -50,6 +50,15 @@ mod unix;
 #[cfg(unix)]
 pub(crate) use unix::{process_is_alive, spawn};
 
+// The read-only shared-page mapping. Linux-only rather than `unix`, because the mechanism it
+// implements (`mmap` + `mprotect` + the DAX device the plan names) is Linux's: on macOS the
+// same calls exist but nothing presents the region to a guest, so declaring it there would be
+// a capability claim without a mechanism behind it.
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{map_readonly, ReadOnlyMap};
+
 /// Which platform backend this build uses, for the report and for
 /// [`crate::Capabilities`].
 ///

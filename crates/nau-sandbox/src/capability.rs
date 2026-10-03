@@ -62,6 +62,16 @@ pub enum Capability {
     OpenFileLimit,
     /// The child can be confined to a subtree of the filesystem.
     FilesystemConfinement,
+    /// A page shared between sandboxes can be made read-only **by a mechanism**, so that no
+    /// guest can write content other guests are reading.
+    ///
+    /// The plan calls this the single most important security requirement in AUSec: a
+    /// writable shared page lets one MicroVM contaminate every MicroVM on the host that maps
+    /// it, which in a multi-tenant deployment is cross-tenant contamination. A backend that
+    /// cannot enforce it must refuse the request rather than share the page anyway, which is
+    /// what this variant being in [`Capability`] buys — the refusal machinery already exists
+    /// and does not need a second mechanism.
+    SharedPageReadOnly,
 }
 
 impl Capability {
@@ -80,11 +90,15 @@ impl Capability {
             Self::ProcessCountLimit => "process_count_limit",
             Self::OpenFileLimit => "open_file_limit",
             Self::FilesystemConfinement => "filesystem_confinement",
+            Self::SharedPageReadOnly => "shared_page_read_only",
         }
     }
 
     /// Every capability, for exhaustive tests and for reporting.
-    pub const ALL: [Capability; 12] = [
+    ///
+    /// The length is written out so that adding a capability without adding it here is a
+    /// compile error rather than a silently shorter list.
+    pub const ALL: [Capability; 13] = [
         Self::EnvAllowlist,
         Self::OutputCap,
         Self::Timeout,
@@ -97,6 +111,7 @@ impl Capability {
         Self::ProcessCountLimit,
         Self::OpenFileLimit,
         Self::FilesystemConfinement,
+        Self::SharedPageReadOnly,
     ];
 }
 
