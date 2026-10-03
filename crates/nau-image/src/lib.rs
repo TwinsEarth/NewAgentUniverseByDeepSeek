@@ -39,13 +39,17 @@
 #![warn(rust_2018_idioms)]
 
 pub mod local;
+pub mod peer;
+pub mod protocol;
 pub mod reader;
 pub mod remote;
 pub mod source;
 
 pub use local::LocalSource;
+pub use peer::{ChunkServer, ChunkTransport, Loopback, PeerSource, SeedingRatio, SeedingStats};
+pub use protocol::{ChunkRequest, ChunkResponse};
 pub use reader::{ChunkReader, Metrics, ReadReport};
-pub use remote::{P2pSource, SourceKind, UdosSource};
+pub use remote::{SourceKind, UdosSource};
 pub use source::{ChunkSource, MemorySource, SourceError};
 
 // The manifest vocabulary, re-exported. It is defined in `nau-core` -- which is where it

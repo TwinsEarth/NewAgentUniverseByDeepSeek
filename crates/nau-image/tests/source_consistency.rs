@@ -25,7 +25,8 @@
 //! is a permanent one.
 
 use nau_image::{
-    ChunkDigest, ChunkSource, LocalSource, P2pSource, SourceError, SourceKind, UdosSource,
+    ChunkDigest, ChunkServer, ChunkSource, LocalSource, Loopback, MemorySource, PeerSource,
+    SourceError, SourceKind, UdosSource,
 };
 
 /// What a source did with one fetch.
@@ -67,10 +68,21 @@ fn classify(source: &dyn ChunkSource, digest: &ChunkDigest) -> Outcome {
 /// per-source test written three times would prove three things, and this proves the one
 /// thing they share.
 fn all_sources(scratch: &std::path::Path) -> Vec<(SourceKind, Box<dyn ChunkSource>)> {
+    // The peer holds nothing, so it answers `NotFound` -- which is a real peer's answer for a
+    // chunk it does not have, and is what the suite is checking the shape of. A-06's version
+    // of this list held a `P2pSource` stub; A-07 defined the protocol, so the entry is now a
+    // real `PeerSource` over an in-process transport.
+    let empty_peer = ChunkServer::new(MemorySource::new());
     vec![
         (SourceKind::Local, Box::new(LocalSource::new(scratch))),
         (SourceKind::Udos, Box::new(UdosSource)),
-        (SourceKind::P2p, Box::new(P2pSource)),
+        (
+            SourceKind::P2p,
+            Box::new(PeerSource::new(
+                "peer-with-nothing",
+                Loopback::new(empty_peer),
+            )),
+        ),
     ]
 }
 
@@ -87,7 +99,7 @@ fn every_source_is_either_serving_or_refusing_and_never_lying() {
     std::fs::write(LocalSource::new(&scratch).path_for(&digest), content).expect("store");
 
     let mut served = 0;
-    let mut refused = 0;
+    let mut not_served = 0;
     for (kind, source) in all_sources(&scratch) {
         let outcome = classify(source.as_ref(), &digest);
         println!("  {:8} -> {outcome:?}", kind.label());
@@ -98,17 +110,21 @@ fn every_source_is_either_serving_or_refusing_and_never_lying() {
                 assert_eq!(
                     kind,
                     SourceKind::Local,
-                    "only the local source has anything to serve in this build"
+                    "only the local source holds this chunk in the fixture"
                 );
             }
-            Outcome::Missing | Outcome::Unavailable | Outcome::Corrupt => refused += 1,
+            Outcome::Missing | Outcome::Unavailable | Outcome::Corrupt => not_served += 1,
         }
     }
 
-    assert_eq!(served, 1, "exactly one source works");
+    assert_eq!(served, 1, "exactly one source has the chunk");
+    // Two do not serve it, and they do not serve it for *different reasons* since A-07: UDOS
+    // is unavailable, while the peer is available and simply does not hold this chunk, which
+    // it reports as `Missing`. Counting them together is right for "was it served"; calling
+    // both "refused" would have been wrong, and was, before this line changed.
     assert_eq!(
-        refused, 2,
-        "the other two refuse, and are counted as refusing"
+        not_served, 2,
+        "the other two do not serve it; one is unavailable and one does not hold it"
     );
 
     let _ = std::fs::remove_dir_all(&scratch);
@@ -140,17 +156,18 @@ fn a_source_answers_the_same_way_twice() {
 }
 
 #[test]
-fn the_unavailable_sources_name_a_working_alternative() {
+fn an_unavailable_source_names_a_working_alternative() {
     // Through the trait, not through `SourceKind`: the suite is about what a caller holding
     // a `dyn ChunkSource` can learn from a refusal.
+    //
+    // UDOS is the only entry since A-07. The peer source was refused in A-06 for the same
+    // reason -- no protocol -- and A-07 defined one, so it now answers rather than refusing
+    // and this test no longer covers it.
     let digest = ChunkDigest::of(b"x");
-    for (kind, source) in [
-        (
-            SourceKind::Udos,
-            Box::new(UdosSource) as Box<dyn ChunkSource>,
-        ),
-        (SourceKind::P2p, Box::new(P2pSource) as Box<dyn ChunkSource>),
-    ] {
+    for (kind, source) in [(
+        SourceKind::Udos,
+        Box::new(UdosSource) as Box<dyn ChunkSource>,
+    )] {
         match source.fetch(&digest) {
             Err(SourceError::Unavailable(why)) => {
                 assert!(
