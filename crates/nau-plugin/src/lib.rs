@@ -83,7 +83,9 @@ pub mod registry;
 pub mod runtime;
 pub mod scheduler;
 pub mod secure;
+pub mod snapshot_audit;
 pub mod tier;
+pub mod update_path;
 
 pub use arbiter::{Arbiter, LoadFailure, LoadRequest, Loaded};
 pub use capability::{Approval, Capability, CapabilityToken, Grant};
@@ -93,7 +95,9 @@ pub use manifest::{
     Limits, Manifest, PriorityClass, SignatureSection, TrustStore, VerifiedManifest,
 };
 pub use scheduler::{Distribution, Scheduler, SubmitError, TaskId};
+pub use snapshot_audit::{SnapshotAudit, SnapshotOperation};
 pub use tier::{PluginId, Tier};
+pub use update_path::{PathTiming, SnapshotCost, UpdatePath};
 
 /// This crate's version, from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
