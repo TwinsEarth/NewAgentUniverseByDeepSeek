@@ -648,6 +648,10 @@ gate('doc-counts', 'The counts the documents state match what the scripts actual
     // stale -- the exact failure this gate was written for, in a document the gate did not
     // read.
     'docs/DEVELOPMENT-PLAN-v3.5-v3.7-AUSec.md',
+    // Added with v3.8/v3.9's plan. It states both counts in its own process section, and the
+    // lesson from the entry above is that a new document with numbers in it belongs in this
+    // list the moment it is written -- not the next time somebody notices it went stale.
+    'docs/DEVELOPMENT-PLAN-v3.8-v3.9-Economy.md',
   ];
   const wrong = [];
   let claims = 0;
