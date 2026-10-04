@@ -1237,6 +1237,118 @@ async function main() {
     return `cpu and network conserved separately, refusals carried nothing, no total across kinds`;
   });
 
+  // D-08's first criterion, both halves, and the honest split between them.
+  //
+  // The sample must not be predictable, and that has two parts: the seed unknown before the fact,
+  // and the draw reproducible after it. This module provides the second and says plainly that the
+  // first is the caller's obligation -- so the check asserts the REPRODUCIBILITY and asserts that
+  // the body does NOT claim unpredictability.
+  await check('a sample is reproducible from its seed, and the body does not claim unpredictability', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const candidates = Array.from({ length: 400 }, (_, i) => `sample-delivery-${i}`);
+
+    const first = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'sample',
+      rate_bps: 2_000,
+      seed: 'deploy-check-seed-a',
+      candidates,
+    });
+    assert(
+      first.status >= 200 && first.status < 300,
+      `sample -> HTTP ${first.status}: ${first.text.slice(0, 220)}`,
+    );
+    assert(first.json.candidates === 400, `400 candidates, got ${first.json.candidates}`);
+    assert(first.json.drawn > 0, 'a 20% sample of 400 must not be empty');
+    assert(
+      first.json.drawn < 400,
+      `and must not be all of them, got ${first.json.drawn}`,
+    );
+
+    // Same seed, same candidates: the same sample, every time. This is what a provider disputing a
+    // finding needs and what an auditor re-running the sample needs.
+    for (let i = 0; i < 3; i += 1) {
+      const again = await resource({
+        capability: 'plugin:lifecycle:read',
+        op: 'sample',
+        rate_bps: 2_000,
+        seed: 'deploy-check-seed-a',
+        candidates,
+      });
+      assert(
+        JSON.stringify(again.json.findings) === JSON.stringify(first.json.findings),
+        `run ${i}: the sample must be reproducible`,
+      );
+    }
+
+    // A different seed draws a different sample: the seed is not decoration.
+    const other = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'sample',
+      rate_bps: 2_000,
+      seed: 'deploy-check-seed-b',
+      candidates,
+    });
+    assert(
+      JSON.stringify(other.json.findings) !== JSON.stringify(first.json.findings),
+      'two seeds must not draw the same sample',
+    );
+
+    // The honest limit, asserted so that a change which DID start generating seeds would fail this
+    // check and force someone to update it.
+    assert(
+      String(first.json.unpredictability).startsWith('NOT provided here'),
+      `the body must not claim unpredictability: ${first.json.unpredictability}`,
+    );
+    assert(
+      String(first.json.dispute_not_filed).includes('PUBLIC KEY'),
+      `and must say why it cannot file the dispute: ${first.json.dispute_not_filed}`,
+    );
+
+    // A fault produces a claim carrying the sample, so a responder can re-derive the draw.
+    const delivered = first.json.findings[0].delivery;
+    const withFault = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'sample',
+      rate_bps: 10_000,
+      seed: 'deploy-check-seed-c',
+      candidates: [delivered],
+      verdicts: { [delivered]: 'sha256:not-what-was-promised' },
+    });
+    assert(withFault.json.drawn === 1, 'a 100% sample of one');
+    const finding = withFault.json.findings[0];
+    assert(finding.faulty === true, JSON.stringify(finding));
+    assert(finding.claim, 'a fault must produce a claim');
+    assert(
+      finding.claim.evidence_digest.includes('deploy-check-seed-c'),
+      `the claim must carry the seed: ${finding.claim.evidence_digest}`,
+    );
+    assert(
+      finding.claim.reason.includes('did not match'),
+      `and say what was wrong: ${finding.claim.reason}`,
+    );
+
+    // A zero rate and a blank seed are both refused: a sample that checks nothing looks like
+    // oversight while finding nothing, and a seed that cannot be reproduced makes a finding
+    // unappealable.
+    for (const [body, why] of [
+      [{ rate_bps: 0, seed: 'x' }, 'a zero rate'],
+      [{ rate_bps: 1_000, seed: '   ' }, 'a blank seed'],
+    ]) {
+      const refused = await resource({
+        capability: 'plugin:lifecycle:read',
+        op: 'sample',
+        candidates: [],
+        ...body,
+      });
+      assert(refused.status === 400, `${why} must be refused, got HTTP ${refused.status}`);
+    }
+
+    return `reproducible from the seed, a different seed differs, and unpredictability NOT claimed`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

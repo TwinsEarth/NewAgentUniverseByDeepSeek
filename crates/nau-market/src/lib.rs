@@ -85,6 +85,7 @@ pub mod pricing;
 pub mod reputation;
 pub mod resource;
 pub mod resource_ledger;
+pub mod sampling;
 pub mod service;
 
 pub use actor::{Actor, Authority};
@@ -101,6 +102,7 @@ pub use resource::{
     ResourceRegistration, ResourceRegistry, RestoreSettlement, SnapshotAsset,
 };
 pub use resource_ledger::{ResourceAudit, ResourceBook, ResourceLedger};
+pub use sampling::{check_delivery, SamplingClaim, SamplingFinding, SamplingPlan, SamplingVerdict};
 pub use service::{Market, MarketConfig, MarketStats};
 
 /// Re-exported so callers of this crate need not depend on the ledger directly.

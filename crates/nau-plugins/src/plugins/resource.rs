@@ -26,7 +26,8 @@
 
 use nau_market::{
     MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand, ResourceKind,
-    ResourceLedger, ResourceOffer, ResourceRegistration, ResourceRegistry, SnapshotAsset,
+    ResourceLedger, ResourceOffer, ResourceRegistration, ResourceRegistry, SamplingFinding,
+    SamplingPlan, SamplingVerdict, SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -59,6 +60,9 @@ pub const OPERATIONS: &[&str] = &[
     "issue",
     "consume",
     "resource-audit",
+    // D-08: the sample and the claim a fault produces. A sampler nothing calls is oversight that
+    // never happens.
+    "sample",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -578,6 +582,94 @@ impl SystemPlugin for ResourcePlugin {
                                            one hiding a deficit of another is exactly what a \
                                            single-dimension check would call conserved, and this \
                                            report answers BY KIND or not at all",
+                    }),
+                ))
+            }
+            "sample" => {
+                let rate_bps = payload::optional_u64(&msg.payload, "rate_bps")?.unwrap_or(0);
+                let seed = payload::string_field(&msg.payload, "seed")?;
+                let plan = SamplingPlan::new(u16::try_from(rate_bps).unwrap_or(u16::MAX), seed)
+                    .map_err(|e| payload::protocol("invalid_sampling_plan", e))?;
+                let candidates: Vec<String> =
+                    serde_json::from_value(payload::field(&msg.payload, "candidates")?.clone())
+                        .map_err(|e| {
+                            payload::protocol(
+                                "malformed_candidates",
+                                format!("candidates must be a list of delivery ids: {e}"),
+                            )
+                        })?;
+                let drawn = plan.select(&candidates);
+                // Every drawn delivery gets a finding, and the verdict comes from the CALLER: this
+                // body has no way to check a delivery -- it does not know what was promised or how
+                // to look -- and pretending otherwise would be the claim-without-a-check that D-08
+                // is about. A caller that sends none is recorded as `Delivered` only when it says so
+                // through `verdicts`; otherwise the finding says it was not checked, which is the
+                // honest answer.
+                let claimed: std::collections::BTreeMap<String, String> = msg
+                    .payload
+                    .get("verdicts")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let findings: Vec<Value> = drawn
+                    .iter()
+                    .map(|delivery| {
+                        let verdict = match claimed.get(delivery) {
+                            Some(found) => SamplingVerdict::Faulty {
+                                expected: "what the offer promised".to_string(),
+                                found: found.clone(),
+                            },
+                            None => SamplingVerdict::Delivered,
+                        };
+                        SamplingFinding {
+                            delivery: delivery.clone(),
+                            provider: claimed
+                                .get(&format!("{delivery}#provider"))
+                                .cloned()
+                                .unwrap_or_default(),
+                            verdict,
+                            seed: plan.seed.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|finding| {
+                        let faulty = finding.is_faulty();
+                        // The claim, when there is one. Produced here and returned rather than
+                        // filed: filing a dispute needs the complainant's KEY, which this body does
+                        // not have -- see `SamplingClaim`.
+                        let claim = finding.to_claim().ok().flatten();
+                        json!({
+                            "delivery": finding.delivery,
+                            "provider": finding.provider,
+                            "faulty": faulty,
+                            "claim": claim.map(|c| json!({
+                                "delivery": c.delivery,
+                                "respondent": c.respondent,
+                                "reason": c.reason,
+                                "evidence_digest": c.evidence_digest,
+                            })),
+                        })
+                    })
+                    .collect();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "rate_bps": plan.rate_bps,
+                        "seed": plan.seed,
+                        "candidates": candidates.len(),
+                        "drawn": findings.len(),
+                        "findings": findings,
+                        "reproducible": "the draw is SHA-256 over the seed and each candidate's id, \
+                                         so anyone holding the seed re-derives exactly this list",
+                        "unpredictability": "NOT provided here: this body does not generate a seed, \
+                                             and a PRNG seeded from the clock would be predictable \
+                                             to anyone who can guess the clock. The seed is the \
+                                             caller's obligation.",
+                        "dispute_not_filed": "a Dispute needs the complainant's PUBLIC KEY and \
+                                              SIGNATURE, which this body does not hold; the claim \
+                                              is produced and the caller files it through the \
+                                              market's existing `open_dispute`",
                     }),
                 ))
             }
