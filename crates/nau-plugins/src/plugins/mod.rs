@@ -42,5 +42,6 @@ pub mod policy;
 pub mod resource;
 pub mod sandbox;
 pub mod security;
+pub mod settlement;
 pub mod storage;
 pub mod transport;

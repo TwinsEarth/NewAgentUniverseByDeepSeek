@@ -1707,6 +1707,126 @@ async function main() {
     return `${first.json.by_kind.length} per-kind books, reproducible, and no total across kinds`;
   });
 
+  // E-01's three criteria, and this is the one release of the v3.9 family that can be verified on
+  // every platform: the vocabulary is a value, not an integration.
+  await check('every settlement rail answers, and the unavailable ones refuse by name', async () => {
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    const rails = await settlement({ capability: 'plugin:lifecycle:read', op: 'rails' });
+    assert(
+      rails.status >= 200 && rails.status < 300,
+      `rails -> HTTP ${rails.status}: ${rails.text.slice(0, 220)}`,
+    );
+    assert(rails.json.total === 13, `thirteen rails, got ${rails.json.total}`);
+    assert(
+      rails.json.available === 2,
+      `exactly the two this repository has: local-ledger and evm-contracts, got ${rails.json.available}`,
+    );
+    assert(rails.json.refused === 11, `and eleven refusals, got ${rails.json.refused}`);
+
+    // EVERY rail answers, and the two answers are distinguishable: an available one says HOW, a
+    // refused one says WHY. A third answer would be one a caller could not act on.
+    for (const rail of rails.json.rails) {
+      if (rail.available) {
+        assert(
+          typeof rail.via === 'string' && rail.via.length > 20,
+          `${rail.rail} is available with no how: ${JSON.stringify(rail)}`,
+        );
+        assert(rail.refused_because === null || rail.refused_because === undefined, rail.rail);
+      } else {
+        assert(
+          typeof rail.refused_because === 'string' && rail.refused_because.length > 30,
+          `${rail.rail} refuses with a reason too short to act on: ${JSON.stringify(rail)}`,
+        );
+        assert(rail.via === null || rail.via === undefined, rail.rail);
+      }
+    }
+
+    // The available set as a WHOLE, so a rail flipped to available without the work fails here.
+    const available = rails.json.rails.filter((r) => r.available).map((r) => r.rail);
+    assert(
+      available.includes('local-ledger') && available.includes('evm-contracts'),
+      `got ${JSON.stringify(available)}`,
+    );
+    // And the rails that need a network say so, rather than reporting themselves local.
+    const local = rails.json.rails.filter((r) => r.local).map((r) => r.rail);
+    assert(local.length === 2, `two local rails, got ${JSON.stringify(local)}`);
+
+    // E-01's second criterion: the decision is explainable, and it names every rail it did not pick.
+    const routed = await settlement({
+      capability: 'plugin:lifecycle:read',
+      op: 'route',
+      amount_minor: 1000,
+      tolerates_network: true,
+      payee_accepts_local: true,
+    });
+    assert(routed.json.chosen === 'local-ledger', `got ${JSON.stringify(routed.json.chosen)}`);
+    assert(
+      routed.json.considered.length === 12,
+      `every other rail must be explained: got ${routed.json.considered.length}`,
+    );
+    const lines = routed.json.explain;
+    assert(
+      lines.some((l) => l.startsWith('chosen: local-ledger')),
+      JSON.stringify(lines),
+    );
+    assert(
+      lines.some((l) => l.includes('lightning: not chosen because')),
+      'and a refused rail must appear with its own reason',
+    );
+    // The refusal reason is the RAIL's, not a generic one.
+    const lightning = routed.json.considered.find((c) => c.rail === 'lightning');
+    assert(
+      String(lightning.why_not).includes('Lightning node'),
+      `the rail's own reason: ${lightning.why_not}`,
+    );
+
+    // A payer who will not wait and a payee who will not take the ledger unit: nothing is chosen,
+    // rather than a rail they said they would not wait for.
+    const stuck = await settlement({
+      capability: 'plugin:lifecycle:read',
+      op: 'route',
+      amount_minor: 10_000,
+      tolerates_network: false,
+      payee_accepts_local: false,
+    });
+    assert(stuck.json.chosen === null, `nothing should be chosen: ${JSON.stringify(stuck.json.chosen)}`);
+    // The same payee, a patient payer: the contracts are chosen.
+    const patient = await settlement({
+      capability: 'plugin:lifecycle:read',
+      op: 'route',
+      amount_minor: 10_000,
+      tolerates_network: true,
+      payee_accepts_local: false,
+    });
+    assert(patient.json.chosen === 'evm-contracts', JSON.stringify(patient.json.chosen));
+
+    // E-02's first criterion: the nouns are named, and no count is quoted.
+    const nouns = await settlement({ capability: 'plugin:lifecycle:read', op: 'nouns' });
+    assert(nouns.json.nouns.length === 10, `ten nouns, got ${nouns.json.nouns.length}`);
+    const names = nouns.json.nouns.map((n) => n.noun);
+    for (const expected of ['ERC-8004', 'x402', 'L402', 'USDC', 'Paymaster']) {
+      assert(names.includes(expected), `${expected} must be named: ${JSON.stringify(names)}`);
+    }
+    assert(
+      String(nouns.json.why_no_count_here).includes('method'),
+      `the answer must say why it carries no figure: ${nouns.json.why_no_count_here}`,
+    );
+    assert(
+      String(nouns.json.the_plan_is_no_longer_right).includes('REFUSED'),
+      'and must say what changed the number',
+    );
+    // E-02's second criterion: the four contracts, by path.
+    assert(nouns.json.existing_contracts.length === 4, JSON.stringify(nouns.json.existing_contracts));
+    assert(
+      nouns.json.existing_contracts.every((p) => p.startsWith('contracts/src/')),
+      'paths a reader can open, not names',
+    );
+
+    return `${rails.json.available} of ${rails.json.total} rails available, 11 refusals by name, and no invented counts`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

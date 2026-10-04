@@ -578,9 +578,10 @@ mod tests {
         // The count is a tripwire: adding a T0 plugin must make someone look here and add it
         // to the shipped set deliberately. 18 as of A-03, which added
         // `com.twinsearth.sys.ausec`; 24 as of C-01, which added the six security
-        // organisations; 25 as of D-01, which added `com.twinsearth.sys.resource`. It has
-        // fired every time, which is what it is for.
-        assert_eq!(boot.names.len(), 25, "the shipped set");
+        // organisations; 25 as of D-01, which added `com.twinsearth.sys.resource`; 26 as of E-01,
+        // which added `com.twinsearth.sys.settlement`. It has fired every time, which is what it
+        // is for.
+        assert_eq!(boot.names.len(), 26, "the shipped set");
         for name in &boot.names {
             assert_eq!(boot.state(name), Some(PluginState::Running), "{name}");
         }

@@ -1226,6 +1226,10 @@ pub fn standard_plugins(
         // trades. Assembled here rather than declared in a document, because D-02 requires the
         // refusal to be something a caller can query.
         Box::new(crate::plugins::resource::ResourcePlugin::new()?),
+        // A-03's method applied to money: the settlement vocabulary, so that "this node cannot
+        // settle that way" is a typed refusal with a reason rather than a silent downgrade. E-01's
+        // whole contribution is that the question can be asked and answered.
+        Box::new(crate::plugins::settlement::SettlementPlugin::new()?),
         // ---- the six security organisations (C-01, v3.7.0) ----
         //
         // Six bodies rather than one, because a plugin's capability set is its authority and one
@@ -1339,6 +1343,10 @@ pub fn standard_declarations() -> Vec<(&'static str, &'static [Capability])> {
         (
             crate::plugins::resource::ResourcePlugin::ID,
             crate::plugins::resource::ResourcePlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::settlement::SettlementPlugin::ID,
+            crate::plugins::settlement::SettlementPlugin::CAPABILITIES,
         ),
         // The six security organisations, declared where they are assembled. Written out rather
         // than derived from `SECURITY_PLUGINS`, because this function's output is what the
