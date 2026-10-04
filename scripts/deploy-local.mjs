@@ -445,6 +445,95 @@ async function main() {
     return `${a.factors.length} factor(s), band ${a.band}, and 3 self-reporting keys refused`;
   });
 
+  // C-07's two rules, attacked rather than read.
+  //
+  // The reporting desk refuses a grade the workspace cannot award, and refuses a verified report
+  // that names nothing to re-check. Both refusals are checked here, in the running node, because a
+  // check that only recorded a well-formed report would pass against a plugin that accepted
+  // anything.
+  await check('a report must be re-checkable, and cannot claim a grade nothing here awards', async () => {
+    const report = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.security.report/call', {
+        capability: 'chain:evm:write',
+        ...body,
+      });
+
+    const good = await report({
+      op: 'record',
+      evidence: {
+        // The SERDE name, which is not the label. `#[serde(rename_all = "snake_case")]` renders
+        // `SignatureVerified` as `signature_verified` with an underscore, while the crate's
+        // published `label` is `signature-verified` with a hyphen. One is a name for a person and
+        // the other is the wire form, and the first version of this check used the wrong one --
+        // which the running node caught with `malformed_evidence` rather than accepting a grade it
+        // did not recognise.
+        grade: 'signature_verified',
+        subject: 'com.twinsearth.sys.security.police',
+        artifact: 'sha256:' + 'c'.repeat(64),
+        digest: 'c'.repeat(64),
+      },
+    });
+    assert(
+      good.status >= 200 && good.status < 300,
+      `a well-formed report must record: HTTP ${good.status}: ${good.text.slice(0, 200)}`,
+    );
+    assert(good.json && good.json.recorded === true, `expected a record, got ${good.text.slice(0, 160)}`);
+    assert(
+      good.json.anchored === false,
+      'recording is not anchoring, and the answer must say so rather than let a reader assume it',
+    );
+
+    // Rule one: a verified report with nothing to re-check.
+    const unbacked = await report({
+      op: 'record',
+      evidence: {
+        grade: 'signature_verified',
+        subject: 'com.twinsearth.sys.security.police',
+        digest: 'd'.repeat(64),
+      },
+    });
+    assert(
+      unbacked.status === 400,
+      `a verified report with no artifact must be refused, got HTTP ${unbacked.status}`,
+    );
+    assert(
+      unbacked.text.includes('evidence_not_recheckable'),
+      `the refusal must name the rule, got: ${unbacked.text.slice(0, 200)}`,
+    );
+
+    // Rule two: a grade above the ceiling this workspace can award.
+    const unreachable = await report({
+      op: 'record',
+      evidence: {
+        grade: 'hardware_attested',
+        subject: 'com.twinsearth.sys.security.police',
+        artifact: 'sha256:' + 'e'.repeat(64),
+        digest: 'e'.repeat(64),
+      },
+    });
+    assert(
+      unreachable.status === 400,
+      `a grade above the ceiling must be refused, got HTTP ${unreachable.status}`,
+    );
+    assert(
+      unreachable.text.includes('grade_not_achievable'),
+      `the refusal must name the rule, got: ${unreachable.text.slice(0, 200)}`,
+    );
+
+    // And the ceiling is the one the grading crate publishes, read from the plugin rather than
+    // restated in this script.
+    const grades = await api('POST', '/plugins/com.twinsearth.sys.security.report/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'grades',
+    });
+    assert(
+      grades.json && grades.json.ceiling === 'signature-verified',
+      `the ceiling must be signature-verified, got ${grades.json && grades.json.ceiling}`,
+    );
+
+    return `recorded a re-checkable report; refused an unbacked one and an unreachable grade; ceiling ${grades.json.ceiling}`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
