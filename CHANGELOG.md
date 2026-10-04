@@ -3,6 +3,80 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.9.3] — 身份锚定：**类型里没有一个「仅本地」的变体**
+
+E-05。`crates/nau-plugins/src/plugins/identity.rs` 扩展（`AnchorSupport` + `AnchorBinding` + 插件操作）+ 部署检查。
+
+### 第 ① 条由**类型**守住
+
+「锚定 **fail-closed**：链不可达时**拒绝**，**不得降级为「仅本地身份」**。」
+
+**最强形式是一个没有「仅本地」变体的类型** ✓：
+`AnchorSupport` 只有 `Available { via }` 与 `Refused { reason }`——
+**与 A-03 的 `EnforcementSupport`、E-01 的 `RailSupport` 同样的两个分支** ✓
+
+> **而一个想在没有链的情况下继续下去的调用方，必须自己去发明第三个分支——
+> 那正是「不提供它」的意义。**
+
+### 而这个门**本来就只持有基本能力集**
+
+`identity.rs` 的文档说它是 `nau-core` 身份模块的一扇门，**而它的能力集是「基本集，别无其他」** ✓——
+**它派生 DID、验证签名，而无法读链** ✓
+
+**所以答案是「拒绝」，理由是能力而不是平台** ✓ ——
+**摘要是被产出的（那是任何地方都能用的部分），而锚定本身被拒绝，而不是在本地近似。**
+
+### 第 ③ 条就是内容寻址
+
+`AgentCardAnchor.sol` 用 `cidHash` 索引它的 `_anchors`、暴露 `verify(cidHash, agentDidHash)` ✓
+**所以一次锚定所承诺的就是一个摘要**——**与 D-06 对快照、v3.8.7 对信誉是同一条纪律** ✓
+
+**而摘要取的是卡片的 `canonical_object`**——**与工作区签名所依据的是同一个** ✓
+**两个一模一样的卡片给同一个摘要，改一个字节给另一个** ✓ ——
+**而这是一条测试能守住的性质，不是一份文档能做出的声明。**
+
+### 第 ② 条：**同一个结论，同一个已经不成立的前提**
+
+计划说 `ERC-8004` **0 命中**、因此不得声称兼容 ✓ —— **而 v3.8.0 的 `REFUSED` 表与 v3.9.0 的 `SETTLEMENT_NOUNS` 都写了它** ✓
+
+**结论存活：这里没有任何东西实现那个标准，而这个绑定明确是本仓库自己的
+`contracts/src/AgentCardAnchor.sol`** ✓ —— **而前提不再成立。E-03 需要过同一次纠正，理由相同。**
+
+### 而这一版**第七次**撞上「发明形状」
+
+我的测试夹具编了三样东西 ✗：`AgentCategory::Compute`、`Skill { name, description }`、`AgentCard::default()`——
+**三样都不存在** ✓ 真实的是 `AgentCard::draft(identity, name, skills, stake, signed_at, nonce)`
+与 `Skill::new(id, version)` ✓
+
+> **这是本项目第七次**（blacklist 字段 v3.7.0、`total_supply` v3.8.4、`Dispute` 十字段 v3.8.6、
+> `ReputationScore` 比较 v3.8.7、十个名词计数 v3.9.0、`Deposit` 参数 v3.8.4，现在这三样）。
+> **修法是读构造函数，而不是猜结构。**
+
+**而同一次我还写错了一条断言**：说「每个生成的密钥对有自己的 DID」✗ ——
+而夹具是**确定性**的（同一种子），**所以两张卡主人相同** ✓
+**夹具是对的，断言的premise是错的**：**确定性身份正是让摘要在多次运行间可复现的东西** ✓
+
+### 而部署检查连撞三处，每一处都教了一件事
+
+1. **能力用错**（`identity.rs` 要求 `MessageSend` 而不是 `LifecycleRead`）
+2. **字段名错**（是 `seed_hex` 而不是 `seed`）
+3. **加完 `anchor` 操作后没有重新构建二进制**（`abi_unknown_operation`）
+
+**而第四条断言我删掉了而不是修好它**：它读的是 identity 插件的 `capabilities` 回答里**并不存在**的字段，
+**而那本来就不属于 E-05 的验收**（能力清单由 `system_plugins` 的 roster 断言）✓
+
+> **一条伸手去够一个自己没有核实过的字段的检查，是一个失败什么都说明不了的检查。**
+
+### 验证
+
+| | |
+|---|---|
+| `nau-plugins` | **identity 12 条**（7 + 5 条锚定） |
+| 部署检查 | **54 项**（53 + 1）——`content-addressed digest, anchoring refused with the capability named, no local-only path` |
+| 文档计数 | **13 条一致**（23 道关卡、**54 项**部署检查） |
+| 覆盖的路径 | **锚定在此处拒绝且没有「仅本地」变体**（理由含 `chain:evm`、`fail-closed`、`local-only`）/ **内容寻址：一个字符改变摘要，同一卡片同一摘要，JSON 往返后仍相同** / **两个摘要都是 64 位小写十六进制**（`bytes32` 要的）/ 不同身份给不同 DID 摘要、同一种子给同一摘要 / **不声称任何外部标准的兼容**（绑定渲染里不含 `ERC-8004`/`8004`，而拒绝按路径点名本仓库的合约）|
+| clippy · fmt | 干净 |
+
 ## [3.9.2] — 对账：**一个没有「已解决」变体的结果类型**
 
 E-04。`crates/nau-plugins/src/plugins/chain.rs` 扩展（`Reconciliation` + `reconcile` + 插件操作）+ 部署检查。

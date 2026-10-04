@@ -47,7 +47,14 @@ pub const CODE_KEY_INVALID: &str = "identity_key_invalid";
 pub const CODE_SIGNATURE_INVALID: &str = "identity_signature_invalid";
 
 /// The operations this plugin implements, for the unknown-operation refusal.
-pub const OPERATIONS: &[&str] = &["did_from_seed", "did_from_public_key", "verify", "binds"];
+pub const OPERATIONS: &[&str] = &[
+    "did_from_seed",
+    "did_from_public_key",
+    "verify",
+    "binds",
+    // E-05: the anchor binding, and the refusal that is the point of it.
+    "anchor",
+];
 
 /// The identity system plugin.
 pub struct IdentityPlugin {
@@ -110,6 +117,46 @@ impl SystemPlugin for IdentityPlugin {
             "did_from_public_key" => self.did_from_public_key(&msg.payload),
             "verify" => self.verify(&msg.payload),
             "binds" => self.binds(&msg.payload),
+            // E-05. The digest is produced and the ANCHOR is refused: this door holds the basic
+            // capability set, so it has no way to send the transaction. Reporting a local-only
+            // identity instead would be exactly the degradation E-05 forbids.
+            "anchor" => {
+                let card: nau_core::domain::AgentCard = serde_json::from_value(
+                    payload::field(&msg.payload, "card")?.clone(),
+                )
+                .map_err(|e| {
+                    payload::protocol(
+                        "malformed_card",
+                        format!("a card must be a well-formed AgentCard: {e}"),
+                    )
+                })?;
+                let binding = AnchorBinding::of(&card)?;
+                let refused_because = match AnchorBinding::support() {
+                    AnchorSupport::Available { .. } => None,
+                    AnchorSupport::Refused { reason } => Some(reason),
+                };
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "cid_hash": binding.cid_hash,
+                        "did_hash": binding.did_hash,
+                        "did": binding.did,
+                        "anchorable_here": AnchorBinding::is_anchorable_here(),
+                        "refused_because": refused_because,
+                        "fail_closed": "there is no variant meaning local-only: a caller that \
+                                        wanted to carry on without the chain would have to invent \
+                                        one, which is the point of not providing it",
+                        "content_addressed": "the cid_hash is the SHA-256 of the card's CANONICAL \
+                                              form -- the same one the workspace signs over -- so \
+                                              two identical cards give one digest and a one-byte \
+                                              change gives another",
+                        "not_this_standard": "this is NOT an implementation of any external \
+                                              agent-identity standard: what it binds to is this \
+                                              repository's own contracts/src/AgentCardAnchor.sol",
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }
@@ -216,6 +263,286 @@ fn parse_key(hex_key: &str) -> Result<PublicKey> {
 /// Build an identity refusal.
 fn key_error(code: &str, detail: String) -> PluginError {
     PluginError::Signature(format!("{code}: {detail}"))
+}
+
+/// How anchoring an `AgentCard` is provided, or why it is not.
+///
+/// # E-05's first criterion, and there is no third variant
+///
+/// "Anchoring is **fail-closed**: when the chain is unreachable, **refuse**; it must not degrade to
+/// 'local identity only'."
+///
+/// The strongest form of that is a type with **no variant meaning local-only**. There is
+/// `Available { via }` and `Refused { reason }` — the same two cases A-03's `EnforcementSupport` and
+/// E-01's `RailSupport` use — and a caller that wanted to carry on without the chain would have to
+/// invent a third case, which is the point of not providing one.
+///
+/// This plugin holds the basic capability set and nothing else: it derives DIDs and verifies
+/// signatures and **cannot read a chain**. So the answer here is `Refused` on every platform, and the
+/// refusal says exactly that rather than being a platform-dependent one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorSupport {
+    /// It exists, and here is what provides it.
+    Available {
+        /// What provides it, in terms that are in this repository.
+        via: &'static str,
+    },
+    /// It does not, and here is what is missing.
+    Refused {
+        /// Why not. A sentence a caller can act on.
+        reason: &'static str,
+    },
+}
+
+/// An anchor binding: what an `AgentCard` would be committed to on-chain.
+///
+/// # E-05's third criterion: the content addressing is the card's own digest
+///
+/// `AgentCardAnchor.sol` keys its `_anchors` mapping by `cidHash` and exposes
+/// `verify(cidHash, agentDidHash)`, so what an anchor commits to is **a digest** — the same
+/// discipline D-06 applies to snapshots and v3.8.7 applies to reputation. Two cards that differ in
+/// one byte must produce different digests and two identical cards the same one, and that is a
+/// property a test can hold rather than a claim a document can make.
+///
+/// # E-05's second criterion, and the premise it needed corrected
+///
+/// The plan says `ERC-8004` has **zero hits** in this repository and that this is why no
+/// compatibility may be claimed. **That was true when the plan was written and is not true now**:
+/// v3.8.0's `REFUSED` table and v3.9.0's `SETTLEMENT_NOUNS` both name it.
+///
+/// **The conclusion survives** — nothing here implements that standard, and this binding is
+/// explicitly the repository's **own** anchor contract — and the premise does not. The same
+/// correction E-03 needed, for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchorBinding {
+    /// The digest an anchor would be filed under, hex.
+    pub cid_hash: String,
+    /// The `Did`'s own hash, hex, as the contract's second argument wants.
+    pub did_hash: String,
+    /// The `Did` this binding is about, for a reader.
+    pub did: String,
+}
+
+impl AnchorBinding {
+    /// Build a binding from a card's canonical bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`PluginError::Protocol`] when the card's canonical form cannot be produced — the same
+    /// function the rest of the workspace uses for signing payloads, so a card that cannot be
+    /// canonicalised is one that could not be anchored **or** signed, and saying so here is better
+    /// than producing a digest of something else.
+    pub fn of(card: &nau_core::domain::AgentCard) -> Result<Self> {
+        let value = serde_json::to_value(card).map_err(|e| {
+            payload::protocol(
+                "card_not_encodable",
+                format!("the card did not encode: {e}"),
+            )
+        })?;
+        // The workspace's canonical form, which requires a root object -- rule 1 of the canonical
+        // JSON contract. Using it rather than `serde_json::to_string` is what makes the digest
+        // reproducible across implementations, which is the whole of content addressing.
+        let canonical = nau_core::canonical::canonical_object(&value).map_err(|e| {
+            payload::protocol(
+                "card_not_canonical",
+                format!("the card has no canonical form: {e}"),
+            )
+        })?;
+        Ok(Self {
+            cid_hash: digest_hex(canonical.as_bytes()),
+            did_hash: digest_hex(card.owner.as_str().as_bytes()),
+            did: card.owner.as_str().to_string(),
+        })
+    }
+
+    /// How this binding would be anchored, or why it cannot be.
+    ///
+    /// **Always `Refused`**, and the reason is the capability rather than the platform: this plugin
+    /// holds the basic set, so it has no `chain:evm:write` and no way to send a transaction. The
+    /// digest is still produced — it is the part a caller can use from anywhere — but **the anchor
+    /// itself is refused rather than approximated locally.**
+    #[must_use]
+    pub fn support() -> AnchorSupport {
+        AnchorSupport::Refused {
+            reason:
+                "anchoring writes to `contracts/src/AgentCardAnchor.sol`, and this plugin holds \
+                     the basic capability set with no `chain:evm:*` -- so it cannot send the \
+                     transaction. The digest below is what a caller WITH that capability would \
+                     anchor; refusing here rather than reporting a local-only identity is E-05's \
+                     fail-closed criterion.",
+        }
+    }
+
+    /// Whether this could be anchored from here.
+    #[must_use]
+    pub fn is_anchorable_here() -> bool {
+        matches!(Self::support(), AnchorSupport::Available { .. })
+    }
+}
+
+/// A lowercase hex SHA-256 of `bytes`.
+///
+/// Local to this module rather than shared, because the workspace's existing digest helpers live
+/// where they are used. A test holds it to its length and its alphabet, which is what keeps it from
+/// being a digest of the wrong width.
+fn digest_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+        out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+    }
+    out
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+    use nau_core::domain::Money;
+    use nau_core::domain::{AgentCard, Skill};
+    use nau_core::identity::Identity;
+
+    /// A card built with the workspace's OWN constructor, not a hand-rolled literal.
+    ///
+    /// My first version of this fixture invented three shapes -- `AgentCategory::Compute`,
+    /// `Skill { name, description }` and `AgentCard::default()` -- and none of the three exists.
+    /// `AgentCard::draft` takes an `Identity`, and `Skill::new` takes an id and a version. That is
+    /// the invented-shape defect for the sixth time in this project, and the fix is to read the
+    /// constructor rather than to guess at the struct.
+    fn card_from(seed: u8, name: &str) -> AgentCard {
+        AgentCard::draft(
+            &Identity::from_seed(&[seed; 32]),
+            name,
+            vec![Skill::new("inference", 1)],
+            Money::from_minor(100),
+            1_700_000_000,
+            1,
+        )
+    }
+
+    /// The common case: one deterministic identity, so a digest is reproducible across runs.
+    fn card(name: &str) -> AgentCard {
+        card_from(7, name)
+    }
+    #[test]
+    fn anchoring_refuses_here_and_there_is_no_local_only_variant() {
+        // E-05's first criterion, and the type is the proof: `AnchorSupport` has two cases and
+        // neither of them means "carry on without the chain".
+        assert!(!AnchorBinding::is_anchorable_here());
+        match AnchorBinding::support() {
+            AnchorSupport::Refused { reason } => {
+                assert!(reason.contains("chain:evm"), "{reason}");
+                assert!(
+                    reason.contains("fail-closed"),
+                    "the refusal must name the criterion it is satisfying: {reason}"
+                );
+                assert!(
+                    reason.contains("local-only"),
+                    "and must name the degradation it is refusing: {reason}"
+                );
+            }
+            AnchorSupport::Available { .. } => {
+                panic!("this plugin holds no chain capability, so it cannot anchor")
+            }
+        }
+    }
+
+    #[test]
+    fn the_digest_is_content_addressed_and_a_single_character_changes_it() {
+        // E-05's third criterion. Two cards differing in one byte must produce different digests,
+        // and the digest must be the canonical form's -- the same one the workspace signs over.
+        let a = AnchorBinding::of(&card("alpha")).expect("a binding");
+        let b = AnchorBinding::of(&card("alphb")).expect("a binding");
+        assert_ne!(
+            a.cid_hash, b.cid_hash,
+            "one character must change the digest"
+        );
+
+        // The same card twice gives the same digest, so a re-anchor of unchanged content is a no-op
+        // rather than a second anchor.
+        let mut same = card("alpha");
+        let first = AnchorBinding::of(&same).expect("a binding");
+        assert_eq!(
+            first.cid_hash,
+            AnchorBinding::of(&same).expect("a binding").cid_hash
+        );
+        // And it is stable across a round trip through JSON, which is what makes it reproducible
+        // rather than merely repeatable within one process.
+        let text = serde_json::to_string(&same).expect("encodes");
+        let back: AgentCard = serde_json::from_str(&text).expect("decodes");
+        assert_eq!(
+            AnchorBinding::of(&back).expect("a binding").cid_hash,
+            first.cid_hash
+        );
+
+        // Mutating one field changes it, so the digest commits to the whole card and not to a part.
+        same.name = "beta".to_string();
+        assert_ne!(
+            AnchorBinding::of(&same).expect("a binding").cid_hash,
+            first.cid_hash
+        );
+    }
+
+    #[test]
+    fn the_two_hashes_are_hex_and_the_right_lengths() {
+        // `AgentCardAnchor.sol` takes two `bytes32` arguments, so both fields must be 64 hex
+        // characters: a short one would be a digest of the wrong thing.
+        let binding = AnchorBinding::of(&card("alpha")).expect("a binding");
+        for (label, hash) in [("cid", &binding.cid_hash), ("did", &binding.did_hash)] {
+            assert_eq!(hash.len(), 64, "{label} must be 32 bytes of hex");
+            assert!(
+                hash.bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                "{label} must be lowercase hex: {hash}"
+            );
+        }
+        // The DID hash is of the DID itself, so two cards owned by DIFFERENT identities differ
+        // there too -- and the two identities come from different seeds, because the fixture is
+        // deterministic rather than generated.
+        //
+        // My first version of this assertion said "each generated keypair has its own DID" and
+        // failed, because the fixture used one fixed seed for both cards. The fixture was right and
+        // the assertion's premise was wrong: a deterministic identity is what makes a digest
+        // reproducible across runs, and differing hashes need differing seeds rather than a random
+        // draw.
+        let other = AnchorBinding::of(&card_from(8, "alpha")).expect("a binding");
+        assert_ne!(
+            binding.did_hash, other.did_hash,
+            "two identities must have two DID hashes"
+        );
+        // The same seed twice gives the same DID hash, which is the property the fixture relies on.
+        assert_eq!(
+            binding.did_hash,
+            AnchorBinding::of(&card("alpha"))
+                .expect("a binding")
+                .did_hash
+        );
+        assert!(binding.did.starts_with("did:nau:"));
+    }
+
+    #[test]
+    fn it_does_not_claim_compatibility_with_any_external_standard() {
+        // E-05's second criterion: what this anchors to is this repository's OWN contract, and the
+        // plan's zero-hit premise for ERC-8004 is no longer true -- the conclusion is unchanged.
+        let binding = AnchorBinding::of(&card("alpha")).expect("a binding");
+        let rendered = format!("{binding:?}");
+        for externality in ["ERC-8004", "ERC8004", "8004"] {
+            assert!(
+                !rendered.contains(externality),
+                "the binding must not claim {externality} compatibility: {rendered}"
+            );
+        }
+        // And the refusal, which is the answer a caller gets, names the local contract by path.
+        if let AnchorSupport::Refused { reason } = AnchorBinding::support() {
+            assert!(
+                reason.contains("AgentCardAnchor.sol"),
+                "the refusal must name THIS repository's contract by path: {reason}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

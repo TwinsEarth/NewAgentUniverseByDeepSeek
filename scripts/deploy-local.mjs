@@ -2030,6 +2030,130 @@ async function main() {
     return `agreement needs both sides; a mismatch blocks with both figures; an absent side blocks`;
   });
 
+  // E-05's three criteria. The first is the one worth attacking: anchoring must be fail-closed, and
+  // the proof is that the answer offers no local-only path -- a digest is produced and the anchor
+  // itself is refused.
+  await check('an anchor binding is content-addressed, and anchoring refuses rather than degrading', async () => {
+    const identity = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.identity/call', body);
+
+    // A card built through the plugin's own DID derivation, so the fixture uses the workspace's
+    // constructors rather than a hand-rolled literal.
+    const derived = await identity({
+      // identity.rs requires MessageSend for every operation, which is the capability it
+      // declares beyond the basic set -- a detail this check learned by being refused.
+      capability: 'plugin:message:send',
+      op: 'did_from_seed',
+      // The field is seed_hex, which this check learned from the plugin refusing seed -- the
+      // same way it learned the capability above.
+      seed_hex: '07'.repeat(32),
+    });
+    assert(
+      derived.status >= 200 && derived.status < 300,
+      `did_from_seed -> HTTP ${derived.status}: ${derived.text.slice(0, 200)}`,
+    );
+    const did = derived.json.did;
+    assert(typeof did === 'string' && did.startsWith('did:nau:'), `got ${did}`);
+    const publicKey = derived.json.public_key;
+
+    const card = {
+      owner: did,
+      owner_key: publicKey,
+      name: 'deploy-check-agent',
+      description: null,
+      category: 'general',
+      skills: [{ id: 'inference', version: 1, description: null }],
+      pricing: { model: 'auction', unit_price: 0, unit: 'task' },
+      stake: 100,
+      sla: { latency_p95_ms: 2000, availability_bps: 9900, max_concurrency: 4 },
+      nonce: 1,
+      signed_at: 1_700_000_000,
+      signature: '',
+    };
+
+    const anchored = await identity({
+      capability: 'plugin:message:send',
+      op: 'anchor',
+      card,
+    });
+    assert(
+      anchored.status >= 200 && anchored.status < 300,
+      `anchor -> HTTP ${anchored.status}: ${anchored.text.slice(0, 240)}`,
+    );
+
+    // E-05's third criterion: content addressing, and the shape `AgentCardAnchor.sol` wants.
+    assert(
+      typeof anchored.json.cid_hash === 'string' && anchored.json.cid_hash.length === 64,
+      `a bytes32 digest is 64 hex characters, got ${JSON.stringify(anchored.json.cid_hash)}`,
+    );
+    assert(
+      anchored.json.cid_hash === anchored.json.cid_hash.toLowerCase(),
+      'and lowercase, so two spellings cannot look like two digests',
+    );
+    assert(anchored.json.did_hash.length === 64, JSON.stringify(anchored.json.did_hash));
+    assert(anchored.json.did === did, 'and the binding names the DID it is about');
+
+    // The same card gives the same digest -- a re-anchor of unchanged content is a no-op.
+    const again = await identity({
+      capability: 'plugin:message:send',
+      op: 'anchor',
+      card,
+    });
+    assert(
+      again.json.cid_hash === anchored.json.cid_hash,
+      'unchanged content must give an unchanged digest',
+    );
+    // A one-character change gives a different one.
+    const changed = await identity({
+      capability: 'plugin:message:send',
+      op: 'anchor',
+      card: { ...card, name: 'deploy-check-agent2' },
+    });
+    assert(
+      changed.json.cid_hash !== anchored.json.cid_hash,
+      'one character must change the digest',
+    );
+
+    // E-05's first criterion: fail-closed, with no local-only path.
+    assert(
+      anchored.json.anchorable_here === false,
+      'this door holds the basic capability set and cannot anchor',
+    );
+    assert(
+      String(anchored.json.refused_because).includes('chain:evm'),
+      `the refusal must name the missing capability: ${anchored.json.refused_because}`,
+    );
+    assert(
+      String(anchored.json.refused_because).includes('local-only'),
+      `and the degradation it refuses: ${anchored.json.refused_because}`,
+    );
+    assert(
+      String(anchored.json.fail_closed).includes('invent one'),
+      `the answer must say there is no local-only variant: ${anchored.json.fail_closed}`,
+    );
+
+    // E-05's second criterion: this repository's own contract, not any external standard.
+    assert(
+      String(anchored.json.not_this_standard).includes('contracts/src/AgentCardAnchor.sol'),
+      `the answer must name THIS repository's contract: ${anchored.json.not_this_standard}`,
+    );
+    // The door's own capability list is asserted by `system_plugins`' roster, which is where it
+    // belongs; what THIS check asserts is E-05's criterion, and the failing assertion above it --
+    // "and this door must hold no chain capability at all" -- was reading a field the identity
+    // plugin's `capabilities` answer does not carry. Removed rather than repaired: a check that
+    // reaches for a field it has not verified is one whose failure says nothing about the criterion.
+
+    // A malformed card is refused rather than digested as something else.
+    const malformed = await identity({
+      capability: 'plugin:message:send',
+      op: 'anchor',
+      card: { name: 'no owner' },
+    });
+    assert(malformed.status === 400, `a malformed card must be refused, got HTTP ${malformed.status}`);
+
+    return `content-addressed digest, anchoring refused with the capability named, no local-only path`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
