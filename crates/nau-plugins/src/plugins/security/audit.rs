@@ -654,10 +654,16 @@ mod tests {
     }
 
     #[test]
-    fn the_refused_keys_are_the_ones_a_subject_would_report_about_itself() {
-        // Read by the request handler, so the list cannot be decorative: if it were empty the
-        // second criterion would be unenforced while still being documented.
-        assert!(!OBSERVATION_KEYS.is_empty());
+    fn the_refused_keys_are_distinct_and_none_is_blank() {
+        // Read by the request handler, so the list cannot be decorative: a blank key would refuse
+        // nothing and a duplicate would be a name nobody checked.
+        //
+        // This test used to open with `assert!(!OBSERVATION_KEYS.is_empty())`, and clippy rejected
+        // it as an expression that always evaluates the same way -- correctly. A five-element const
+        // array is not empty and the compiler knows it, so the line could never fail. It is the
+        // same tautology I wrote in `police.rs` at v3.7.0, fixed there, and then wrote again here:
+        // the shape of the mistake is that asserting a property the type system already guarantees
+        // FEELS like a test and is not one.
         for key in OBSERVATION_KEYS {
             assert!(!key.trim().is_empty(), "a blank key would refuse nothing");
         }
