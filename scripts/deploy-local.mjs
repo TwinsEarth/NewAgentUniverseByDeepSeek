@@ -534,6 +534,114 @@ async function main() {
     return `recorded a re-checkable report; refused an unbacked one and an unreachable grade; ceiling ${grades.json.ceiling}`;
   });
 
+  // C-08's three criteria, attacked rather than read.
+  await check('a penalty is the rule\'s, the field names are the struct\'s, and the tribunal cannot pardon itself', async () => {
+    const tribunal = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.security.tribunal/call', {
+        capability: 'kernel:policy:write',
+        ...body,
+      });
+
+    // Criterion one, as an ATTEMPT TO BE LET OFF. The request asks for a reprimand for malware;
+    // the rule says the name is condemned, and the answer says it was overruled.
+    const lenient = await tribunal({
+      op: 'rule',
+      reason: 'malware',
+      violations: 0,
+      penalty: 'reprimand',
+    });
+    assert(
+      lenient.status >= 200 && lenient.status < 300,
+      `rule -> HTTP ${lenient.status}: ${lenient.text.slice(0, 200)}`,
+    );
+    assert(
+      lenient.json && lenient.json.penalty === 'condemn-name',
+      `a request may not choose its own punishment; the rule gives condemn-name for malware, got ${lenient.json && lenient.json.penalty}`,
+    );
+    assert(
+      lenient.json.overruled === true,
+      'the answer must say the request was overruled rather than leaving a caller to diff two fields',
+    );
+    assert(
+      String(lenient.json.decided_by).includes('not the request'),
+      `the answer must say who decided, got ${lenient.json.decided_by}`,
+    );
+
+    // And a policy violation reaches a build condemnation only on the kernel's own threshold.
+    const early = await tribunal({ op: 'rule', reason: 'policy_violation', violations: 2 });
+    const atThreshold = await tribunal({ op: 'rule', reason: 'policy_violation', violations: 3 });
+    assert(
+      early.json.penalty === 'reprimand' && atThreshold.json.penalty === 'condemn-build',
+      `the third violation must be the one that condemns: ${early.json.penalty} then ${atThreshold.json.penalty}`,
+    );
+
+    // Criterion two: the field names are this repository's, and the design's are not.
+    //
+    // Called with the READ capability rather than the write one, because asking what the fields are
+    // is not writing policy. The first version of this used the same helper as the rulings and got
+    // `undefined` for the list -- the plugin refused a write authority it does not need for a
+    // question, which is the capability model working rather than getting in the way.
+    const fields = await api('POST', '/plugins/com.twinsearth.sys.security.tribunal/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'penalties',
+    });
+    assert(
+      fields.status === 200,
+      `penalties -> HTTP ${fields.status}: ${fields.text.slice(0, 160)}`,
+    );
+    const listed = fields.json.blacklist_fields;
+    assert(
+      Array.isArray(listed) && listed.includes('module_sha256'),
+      `the real field is module_sha256: ${JSON.stringify(listed)}`,
+    );
+    assert(
+      !listed.includes('wasm_sha256') && !listed.includes('evidence_hash'),
+      `the original design's names exist nowhere and must not appear as fields: ${JSON.stringify(listed)}`,
+    );
+
+    // Criterion three: the tribunal cannot pardon on its own authority.
+    const selfPardon = await tribunal({
+      op: 'unseal',
+      plugin_name: 'com.twinsearth.sys.security.police',
+      approval: 'host',
+    });
+    assert(
+      selfPardon.status === 400,
+      `the host is this node and this node condemned, so its own approval must be refused: HTTP ${selfPardon.status}`,
+    );
+    assert(
+      selfPardon.text.includes('self_approval'),
+      `the refusal must name the rule, got: ${selfPardon.text.slice(0, 200)}`,
+    );
+
+    const granted = await tribunal({
+      op: 'unseal',
+      plugin_name: 'com.twinsearth.sys.security.police',
+      approval: 'operator',
+      module_sha256: 'f'.repeat(64),
+    });
+    assert(
+      granted.status >= 200 && granted.status < 300,
+      `an operator approval must be accepted: HTTP ${granted.status}: ${granted.text.slice(0, 200)}`,
+    );
+    assert(
+      granted.json && granted.json.approved_by === 'operator',
+      `the record must say WHO approved, not merely that it was allowed: ${JSON.stringify(granted.json).slice(0, 160)}`,
+    );
+
+    // And a missing approval is a refusal rather than a default.
+    const noApproval = await tribunal({
+      op: 'unseal',
+      plugin_name: 'com.twinsearth.sys.security.police',
+    });
+    assert(
+      noApproval.status === 400 && noApproval.text.includes('missing_approval'),
+      `unsealing without an approval must be refused, got HTTP ${noApproval.status}: ${noApproval.text.slice(0, 160)}`,
+    );
+
+    return `overruled a lenient request, named the real fields, refused a self-pardon and a missing one`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
