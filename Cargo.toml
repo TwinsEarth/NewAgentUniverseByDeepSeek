@@ -8,7 +8,7 @@ members = ["crates/*"]
 #   * VERSION            (plain text, used by scripts + CI + SDKs)
 #   * [workspace.package] version here
 # `cargo test -p nau-core --test version_consistency` fails if they ever diverge.
-version = "3.9.3"
+version = "3.9.4"
 edition = "2021"
 # MSRV. Not a guess: `zeroize 1.9.0` — a transitive dependency of ed25519-dalek,
 # via curve25519-dalek — is an edition-2024 crate, so cargo older than 1.85 cannot
@@ -23,32 +23,32 @@ keywords = ["agent", "p2p", "decentralized", "marketplace", "swarm"]
 categories = ["network-programming", "concurrency"]
 
 [workspace.dependencies]
-nau-core = { path = "crates/nau-core", version = "3.9.3" }
+nau-core = { path = "crates/nau-core", version = "3.9.4" }
 # The image chunk reader. Deliberately its own crate rather than a module in `nau-core`:
 # that crate's contract is "no I/O, no async", and resolving a chunk means fetching one.
 # The kernel must not depend on this -- see the forbidden list in
 # `scripts/check-plugin-invariants.mjs`.
-nau-image = { path = "crates/nau-image", version = "3.9.3" }
-nau-ledger = { path = "crates/nau-ledger", version = "3.9.3" }
-nau-consensus = { path = "crates/nau-consensus", version = "3.9.3" }
-nau-store = { path = "crates/nau-store", version = "3.9.3" }
-nau-market = { path = "crates/nau-market", version = "3.9.3" }
+nau-image = { path = "crates/nau-image", version = "3.9.4" }
+nau-ledger = { path = "crates/nau-ledger", version = "3.9.4" }
+nau-consensus = { path = "crates/nau-consensus", version = "3.9.4" }
+nau-store = { path = "crates/nau-store", version = "3.9.4" }
+nau-market = { path = "crates/nau-market", version = "3.9.4" }
 # Added for the official MCP plugin. Note that the edge has to exist in **two** places: a
 # `nau-plugins/Cargo.toml` line saying `.workspace = true` without an entry here is a
 # manifest error, and cargo reports it against an unrelated workspace member, which is how
 # this was found.
-nau-mcp = { path = "crates/nau-mcp", version = "3.9.3" }
-nau-net = { path = "crates/nau-net", version = "3.9.3" }
-nau-agent = { path = "crates/nau-agent", version = "3.9.3" }
-nau-node = { path = "crates/nau-node", version = "3.9.3" }
-nau-http = { path = "crates/nau-http", version = "3.9.3" }
-nau-erasure = { path = "crates/nau-erasure", version = "3.9.3" }
-nau-libp2p = { path = "crates/nau-libp2p", version = "3.9.3" }
-nau-attest = { path = "crates/nau-attest", version = "3.9.3" }
-nau-migrate = { path = "crates/nau-migrate", version = "3.9.3" }
-nau-sandbox = { path = "crates/nau-sandbox", version = "3.9.3" }
-nau-plugin = { path = "crates/nau-plugin", version = "3.9.3" }
-nau-plugins = { path = "crates/nau-plugins", version = "3.9.3" }
+nau-mcp = { path = "crates/nau-mcp", version = "3.9.4" }
+nau-net = { path = "crates/nau-net", version = "3.9.4" }
+nau-agent = { path = "crates/nau-agent", version = "3.9.4" }
+nau-node = { path = "crates/nau-node", version = "3.9.4" }
+nau-http = { path = "crates/nau-http", version = "3.9.4" }
+nau-erasure = { path = "crates/nau-erasure", version = "3.9.4" }
+nau-libp2p = { path = "crates/nau-libp2p", version = "3.9.4" }
+nau-attest = { path = "crates/nau-attest", version = "3.9.4" }
+nau-migrate = { path = "crates/nau-migrate", version = "3.9.4" }
+nau-sandbox = { path = "crates/nau-sandbox", version = "3.9.4" }
+nau-plugin = { path = "crates/nau-plugin", version = "3.9.4" }
+nau-plugins = { path = "crates/nau-plugins", version = "3.9.4" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

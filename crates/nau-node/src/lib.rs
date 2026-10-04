@@ -60,6 +60,7 @@ pub mod plugin_cli;
 // models signed entries and an appeal state machine; this is what lets an operator
 // actually condemn a plugin or lift a condemnation, with integrity coming from the
 // signature on each entry rather than from the file's permissions.
+pub mod payment;
 pub mod plugin_blacklist;
 pub mod plugin_host;
 // The driver for the third-party registration and review flow. `nau-plugin` models the

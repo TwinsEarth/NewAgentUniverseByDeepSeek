@@ -2154,6 +2154,49 @@ async function main() {
     return `content-addressed digest, anchoring refused with the capability named, no local-only path`;
   });
 
+  // E-06's third criterion. Its first, second and fourth live in `nau-node`'s payment module, which
+  // is host-side and not on this HTTP surface -- they are held by unit tests, and saying so here is
+  // better than a check that pretended to exercise them through a door that does not reach them.
+  await check('the two HTTP payment rails refuse by name, and say what they would need', async () => {
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    const rails = await settlement({ capability: 'plugin:lifecycle:read', op: 'rails' });
+    for (const [label, mustName] of [
+      ['http-payment', 'sandbox'],
+      ['lightning-auth', 'Lightning'],
+    ]) {
+      const rail = rails.json.rails.find((r) => r.rail === label);
+      assert(rail, `${label} must be in the vocabulary`);
+      assert(rail.available === false, `${label} must not be available`);
+      assert(
+        String(rail.refused_because).includes(mustName),
+        `${label} must name what is missing (${mustName}): ${rail.refused_because}`,
+      );
+    }
+
+    // The nouns table names both protocols, and it carries no count -- the correction v3.9.0 made.
+    const nouns = await settlement({ capability: 'plugin:lifecycle:read', op: 'nouns' });
+    const names = nouns.json.nouns.map((n) => n.noun);
+    for (const expected of ['x402', 'L402']) {
+      assert(
+        names.includes(expected),
+        `${expected} must be refused by name: ${JSON.stringify(names)}`,
+      );
+      const entry = nouns.json.nouns.find((n) => n.noun === expected);
+      assert(entry.available === false, `${expected} must not be reported available`);
+    }
+
+    // And the answer that says what an HTTP payment would need, which is the honest deliverable.
+    const x402 = nouns.json.nouns.find((n) => n.noun === 'x402');
+    assert(
+      String(x402.refused_because).includes('outbound network'),
+      `x402 must name the sandbox rule that refuses it twice over: ${x402.refused_because}`,
+    );
+
+    return `x402 and L402 refuse by name; the host-side signing property is held by unit tests`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
