@@ -156,6 +156,113 @@ gate('libp2p', 'libp2p stack (--features libp2p: real two-node swarm)', () => {
 });
 
 // --- Conformance vectors ----------------------------------------------------
+gate('defence-in-depth', 'The three layers exist, the first is this repository\'s own, and the gap is named', () => {
+  // WHY THIS GATE EXISTS
+  // --------------------
+  // C-10 asks for the three-layer defence to be landed and verified end to end, and for two things
+  // to be true about how it is described.
+  //
+  // The first is that the design's first layer does not exist here. It named an OPA/Rego policy
+  // engine; `Rego` and `OPA` have ZERO hits across crates, contracts and docs. What this repository
+  // actually has as its first layer is the **capability token and the manifest verification**, which
+  // is what a plugin's authority is checked against on every call. Claiming the layer the design
+  // named would be describing software that is not here.
+  //
+  // The second is the boundary. The three layers do not defend against a kernel vulnerability, and
+  // there is no general defence against one in this workspace. Security organisations observe
+  // behaviour; they do not patch a kernel. Saying so is the point of the gate -- a defence described
+  // without its gap invites a reader to assume there is none.
+  const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  // IMPLEMENTATION only, not documentation.
+  //
+  // The first version of this gate scanned `docs/` too and failed with 16 hits -- every one of them
+  // a document SAYING that OPA/Rego is not here. A gate that forbids naming an absent mechanism
+  // forbids the honesty it was written to enforce: the plan and DEFENCE-IN-DEPTH.md both have to
+  // name it in order to say it is missing.
+  //
+  // So the check is on the code. A Rego engine would arrive as source.
+  const sources = [];
+  for (const dir of ['crates', 'contracts/src']) {
+    (function walk(d) {
+      if (!fs.existsSync(d)) return;
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.name === 'target' || e.name === 'node_modules' || e.name === 'lib') continue;
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(rs|sol)$/.test(e.name)) sources.push(p);
+      }
+    })(path.join(ROOT, dir));
+  }
+  const hits = (needle) =>
+    sources.reduce((n, f) => n + (fs.readFileSync(f, 'utf8').split(needle).length - 1), 0);
+
+  // Layer one: the repository's own, and the design's is absent.
+  const rego = hits('Rego') + hits('OPA ');
+  if (rego !== 0) {
+    return { state: 'FAIL', detail: `the design's first layer (OPA/Rego) has ${rego} hit(s); either it now exists and this gate is out of date, or the claim that it does not is wrong`, ms: 0 };
+  }
+  const capability = read('crates/nau-plugin/src/capability.rs');
+  const manifest = read('crates/nau-plugin/src/manifest.rs');
+  if (!capability.includes('pub struct CapabilityToken') || !manifest.includes('TrustStore')) {
+    return { state: 'FAIL', detail: 'layer one must be the capability token and the manifest verification, and one of them is not where it was', ms: 0 };
+  }
+
+  // Layer two: declared, with its premises, and refused off Linux.
+  const enforcement = read('crates/nau-sandbox/src/enforcement.rs');
+  for (const required of ['APPARMOR_SUPPORT', 'EBPF_SUPPORT', 'CAP_MAC_ADMIN', 'premises_of']) {
+    if (!enforcement.includes(required)) {
+      return `layer two is missing \`${required}\`; the OS mechanisms and their premises are the whole of it`;
+    }
+  }
+  // The premise C-09 required be tightened: AppArmor confines root, and NOT a process that holds
+  // CAP_MAC_ADMIN. The check is on the words, because the words are what a reader acts on.
+  if (!enforcement.includes('Root alone does not confer it')) {
+    return { state: 'FAIL', detail: 'the AppArmor premise must say that root is not the same as holding CAP_MAC_ADMIN', ms: 0 };
+  }
+
+  // Layer three: the sandbox, and its own refusal off Linux.
+  const sandbox = read('crates/nau-sandbox/src/lib.rs');
+  if (!sandbox.includes('nau-sandbox')) { return { state: 'FAIL', detail: 'layer three is the sandbox crate and it is not there', ms: 0 }; }
+  const shared = read('crates/nau-sandbox/src/shared_page.rs');
+  const reclaim = read('crates/nau-sandbox/src/reclaim.rs');
+  if (!shared.includes('SHARED_PAGE_SUPPORT') || !reclaim.includes('MEMORY_RECLAIM_SUPPORT')) {
+    return { state: 'FAIL', detail: 'layer three must refuse its Linux-only mechanisms rather than skipping them', ms: 0 };
+  }
+
+  // The boundary, named. A defence described without its gap invites a reader to assume none.
+  //
+  // Read from the DOCS rather than from the code scan above, and that is the point: the gap is a
+  // sentence somebody has to write, not a property a compiler can check. The two patterns are
+  // deliberately loose about wording and strict about both halves being present -- a document that
+  // mentions kernel vulnerabilities without saying they are undefended HERE has not recorded the
+  // boundary.
+  const boundaryDocs = [
+    'docs/DEFENCE-IN-DEPTH.md',
+    'docs/DEVELOPMENT-PLAN-v3.5-v3.7-AUSec.md',
+    'docs/SELF-AUDIT.md',
+  ].filter((rel) => fs.existsSync(path.join(ROOT, rel)));
+  const boundary = boundaryDocs.some((rel) => {
+    const text = read(rel);
+    // Both languages, because this repository writes its release notes and its long-form documents
+    // in Chinese and its code in English -- and the first version of this check matched only the
+    // English, so DEFENCE-IN-DEPTH.md said the thing it was looking for in the language it was not
+    // looking in.
+    const mentionsKernelVulnerabilities = /kernel vulnerabilit|内核漏洞/i.test(text);
+    const saysTheyAreUndefended =
+      /no general defence|not defended|缺通用防御|没有针对内核漏洞|没有通用防御/i.test(text);
+    return mentionsKernelVulnerabilities && saysTheyAreUndefended;
+  });
+  if (!boundary) {
+    return {
+      state: 'FAIL',
+      detail: `the gap must be written down in one of ${boundaryDocs.join(', ')}: no layer here defends against a kernel vulnerability`,
+      ms: 0,
+    };
+  }
+
+  return { state: 'PASS', detail: `layer 1 capability token + manifest (OPA/Rego: ${rego} hits), layer 2 OS enforcement with ${enforcement.split('Premise {').length - 1} premises, layer 3 sandbox refusals, and the kernel gap named`, ms: 0 };
+});
+
 gate('conformance', 'Conformance vectors regenerate byte-identically', () => {
   const before = fs.readFileSync(path.join(ROOT, 'conformance/vectors.json'), 'utf8');
   const r = run(NODE, ['conformance/generate.mjs']);

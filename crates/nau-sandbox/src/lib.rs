@@ -63,6 +63,7 @@
 
 pub mod capability;
 pub mod component;
+pub mod enforcement;
 pub mod error;
 pub mod executor;
 pub mod manager;

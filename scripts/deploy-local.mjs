@@ -642,6 +642,68 @@ async function main() {
     return `overruled a lenient request, named the real fields, refused a self-pardon and a missing one`;
   });
 
+  // C-10's second criterion: an over-reach attempt, and the chain that stops it.
+  //
+  // The design names `XFS_IOC_SWAPEXT` -- an ioctl that swaps file extents and has been used to
+  // modify a file the caller was not permitted to write. It is an over-reach of the FIRST layer's
+  // kind: the sandbox asking to do something it does not hold the authority for. So the attempt
+  // here is the same shape, and what is asserted is the chain rather than the ioctl: the request is
+  // refused BY NAME, at the first layer, and the refusal reaches the caller.
+  //
+  // WHAT THIS DOES NOT SHOW, and the boundary document says so: a kernel vulnerability that only
+  // corrupts kernel memory does not need an authority the caller lacks, so no layer here intercepts
+  // it. This check is about the permission-shaped over-reach and nothing else.
+  await check('an over-reach is stopped at the first layer, by name', async () => {
+    // A sandbox asking for kernel authority it does not hold. `sandbox:create` is a real capability
+    // and the sandbox plugin is a real holder of part of the pair -- so this is an asked-for
+    // authority rather than a made-up string.
+    const overreach = await api('POST', '/plugins/com.twinsearth.sys.ausec/call', {
+      capability: 'kernel:policy:write',
+      op: 'backends',
+    });
+    assert(
+      overreach.status === 400,
+      `an undeclared capability must be refused: HTTP ${overreach.status}: ${overreach.text.slice(0, 200)}`,
+    );
+    assert(
+      /capability/i.test(overreach.text),
+      `the refusal must be the capability check rather than something downstream, got: ${overreach.text.slice(0, 200)}`,
+    );
+    assert(
+      overreach.text.includes('kernel:policy:write'),
+      `the refusal must NAME the capability it refused, which is what makes it diagnosable: ${overreach.text.slice(0, 220)}`,
+    );
+
+    // And the same over-reach through the plugin whose job is confinement: asking it to configure
+    // isolation under a capability it does not declare.
+    const wrongDoor = await api('POST', '/plugins/com.twinsearth.sys.security.audit/call', {
+      capability: 'kernel:plugin:manage',
+      op: 'capabilities',
+    });
+    assert(
+      wrongDoor.status === 400,
+      `a body asked to act outside its authority must refuse: HTTP ${wrongDoor.status}`,
+    );
+
+    // The layer is not merely refusing everything: a capability the plugin DOES declare is served,
+    // so the refusal above is the capability check and not a broken endpoint.
+    //
+    // The capability here is the one AUSec's `backends` op actually requires. The first version
+    // used the read capability and was refused -- correctly, since asking which backends exist is
+    // done under the sandbox authority in that plugin -- which made the control fail while the
+    // thing it was controlling for was working.
+    const allowed = await api('POST', '/plugins/com.twinsearth.sys.ausec/call', {
+      capability: 'sandbox:create',
+      op: 'backends',
+    });
+    assert(
+      allowed.status >= 200 && allowed.status < 300,
+      `a declared capability must be served, or the refusal above proves nothing: HTTP ${allowed.status}: ${allowed.text.slice(0, 200)}`,
+    );
+
+    return 'refused by name at layer one, and a declared capability still served';
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
