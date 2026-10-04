@@ -777,6 +777,11 @@ async function main() {
       // with invalid type: map, expected i64 -- the wire form is the crate's, not this script's.
       price: 500,
       expires_in: 60,
+      // Added by D-04: an offer now says what latency it can serve and how long it promises to
+      // take, because a matcher that had to guess would guess permissive -- and guessing permissive
+      // is the direction that puts an interactive task on a batch node.
+      latency: 'standard',
+      eta_secs: 30,
     };
 
     // Below the minimum. The threshold is the MARKET's, read through the plugin rather than
@@ -875,6 +880,102 @@ async function main() {
     );
 
     return `refused below-minimum and a zero claim, and the rule decided the penalty`;
+  });
+
+  // D-04's first criterion, attacked: an interactive task must NOT be matched to a tolerant node,
+  // and the exclusion must be REPORTED rather than silent.
+  //
+  // The difference from the bid path is the point. `rank_bids` DISFAVOURS a slow bid and lets it win
+  // anyway if it is cheap enough -- right for a market where everything is a trade-off. "Must not be
+  // matched" is a filter, so the tolerant node is set at a TWENTIETH of the price to make the two
+  // distinguishable: a penalty would still have let it win.
+  await check('an interactive task is not matched to a tolerant node, and says who was excluded', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const offerOf = (provider, latency, price, eta) => ({
+      provider,
+      amount: { kind: 'cpu', quantity: 100 },
+      price,
+      expires_in: 60,
+      latency,
+      eta_secs: eta,
+    });
+
+    for (const [provider, latency, price, eta] of [
+      ['did:example:cheap-slow', 'tolerant', 10, 600],
+      ['did:example:dear-fast', 'interactive', 200, 5],
+    ]) {
+      const r = await resource({
+        capability: 'plugin:storage:own',
+        op: 'register',
+        registration: {
+          provider,
+          offer: offerOf(provider, latency, price, eta),
+          stake: 100_000_000,
+          registered_at: 1,
+        },
+      });
+      assert(
+        r.status >= 200 && r.status < 300,
+        `registering ${provider} -> HTTP ${r.status}: ${r.text.slice(0, 200)}`,
+      );
+    }
+
+    const matched = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'match',
+      demand: { amount: { kind: 'cpu', quantity: 10 }, latency: 'interactive' },
+      target_secs: 30,
+    });
+    assert(
+      matched.status >= 200 && matched.status < 300,
+      `match -> HTTP ${matched.status}: ${matched.text.slice(0, 220)}`,
+    );
+    assert(
+      matched.json.winner && matched.json.winner.provider === 'did:example:dear-fast',
+      `an interactive task must go to the interactive node, got ${JSON.stringify(matched.json.winner)}`,
+    );
+    const excluded = matched.json.excluded.map((e) => e.provider);
+    assert(
+      excluded.includes('did:example:cheap-slow'),
+      `the tolerant node must be EXCLUDED, not merely outscored -- it is twenty times cheaper and a penalty would have let it win: ${JSON.stringify(matched.json.excluded)}`,
+    );
+    const why = matched.json.excluded.find((e) => e.provider === 'did:example:cheap-slow').why;
+    assert(
+      why.includes('tolerant') && why.includes('interactive'),
+      `the exclusion must name both classes, got: ${why}`,
+    );
+
+    // The other direction, so the rule is not simply refusing everything: a tolerant task may be
+    // served by the interactive node.
+    //
+    // Asserted as a PROPERTY rather than a count. The first version required exactly two ranked
+    // offers, which is true only if this check runs against a fresh registry -- and the D-03 check
+    // above registers a third provider in the same node, so the count was three. That is the
+    // deployment-check equivalent of a test that depends on the order it runs in, and the same
+    // mistake the C-06 trust checks made.
+    const batch = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'match',
+      demand: { amount: { kind: 'cpu', quantity: 10 }, latency: 'tolerant' },
+      target_secs: 30,
+    });
+    const batchRanked = batch.json.ranked.map((r) => r.provider);
+    assert(
+      batchRanked.includes('did:example:dear-fast'),
+      `a tolerant task may use the interactive node: ${JSON.stringify(batchRanked)}`,
+    );
+    assert(
+      batchRanked.includes('did:example:cheap-slow'),
+      `and the tolerant node, which was excluded for the interactive task: ${JSON.stringify(batchRanked)}`,
+    );
+    assert(
+      batch.json.excluded.length === 0,
+      `nothing should be excluded for a tolerant task, got ${JSON.stringify(batch.json.excluded)}`,
+    );
+
+    return `excluded the twenty-times-cheaper tolerant node and named why; a tolerant task saw both`;
   });
 
   await check('a plugin is quarantined on the third violation, not before', async () => {

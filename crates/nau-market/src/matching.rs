@@ -43,11 +43,51 @@ pub struct MatchOutcome {
     pub skipped: Vec<(Did, String)>,
 }
 
+/// The one scoring rule: reputation per unit price, discounted by how late the promise runs.
+///
+/// # Why this is public and why it is separate from `score_bid`
+///
+/// D-04 asks that the resource matcher reuse this crate's ordering rather than introduce a second
+/// one. "Reuse" cannot mean calling [`rank_bids`], whose inputs are `Task`/`Bid`/`AgentCard` — a
+/// resource offer is none of those — so it means what it can honestly mean: **one implementation of
+/// the formula, called from both places.**
+///
+/// A copy would have been the second implementation, and the two would drift the first time either
+/// was tuned. This is the same reasoning the rest of this workspace applies to thresholds: one
+/// number, in one place.
+///
+/// # The formula, unchanged from `score_bid`
+///
+/// `value = reputation_bps × 1_000_000 / price_minor`, penalised by how far `eta_secs` runs past
+/// `target_secs`. All integer, and the penalty saturates at 90% so a slow bid is heavily
+/// disfavoured without producing a zero that could collide with another zero.
+///
+/// Returns `None` for a non-positive price, which is the one input the formula cannot speak about.
+#[must_use]
+pub fn score_value(reputation_bps: u32, price_minor: i64, eta_secs: u64, target_secs: u64) -> i128 {
+    if price_minor <= 0 {
+        return 0;
+    }
+    let value = i128::from(reputation_bps) * 1_000_000 / i128::from(price_minor);
+    let target = target_secs.max(1);
+    let over = eta_secs.saturating_sub(target);
+    let penalty_bps = 10_000u64.saturating_sub(
+        over.saturating_mul(10_000)
+            .checked_div(target)
+            .unwrap_or(u64::MAX)
+            .min(9_000),
+    );
+    value * i128::from(penalty_bps)
+}
+
 /// Score one bid, or explain why it cannot be scored.
 ///
 /// The score is `value × latency_penalty` where
 /// `value = reputation_bps × 1_000_000 / price_minor` (reputation per unit price) and
 /// the penalty is expressed in basis points against the agent's own SLA. All integer.
+///
+/// The arithmetic itself lives in [`score_value`], so that the resource matcher and this one cannot
+/// disagree about what a score is.
 fn score_bid(
     bid: &Bid,
     agent: &AgentCard,
@@ -58,22 +98,14 @@ fn score_bid(
         return Err("bid price is not positive".into());
     }
 
-    // Reputation per unit price. Scaled by 1e6 so small prices do not collapse to 0.
-    let value = i128::from(reputation_bps) * 1_000_000 / i128::from(price);
-
     // The agent's own promised p95, rounded up to whole seconds, at least 1.
     let target_secs = agent.sla.latency_p95_ms.div_ceil(1_000).max(1);
-    let over = bid.eta_secs.saturating_sub(target_secs);
-    // Penalty saturates at 90% so a slow bid is heavily disfavoured but never
-    // produces a zero score that could collide with another zero.
-    let penalty_bps = 10_000u64.saturating_sub(
-        over.saturating_mul(10_000)
-            .checked_div(target_secs)
-            .unwrap_or(u64::MAX)
-            .min(9_000),
-    );
-
-    Ok(value * i128::from(penalty_bps))
+    Ok(score_value(
+        reputation_bps,
+        price,
+        bid.eta_secs,
+        target_secs,
+    ))
 }
 
 /// Rank every valid bid for `task`, best first.

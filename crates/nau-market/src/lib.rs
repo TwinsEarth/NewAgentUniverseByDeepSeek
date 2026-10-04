@@ -86,15 +86,16 @@ pub mod resource;
 pub mod service;
 
 pub use actor::{Actor, Authority};
-pub use matching::{rank_bids, MatchOutcome};
+pub use matching::{rank_bids, score_value, MatchOutcome};
 pub use persistence::{
     MarketSnapshot, RestoreDefect, RestoreReport, MARKET_PROTOCOL_KEY, MARKET_STATE_KEY,
     MARKET_STATE_SCHEMA, MARKET_VERSION_KEY,
 };
 pub use reputation::Reputation;
 pub use resource::{
-    MeteredAmount, ResourceAmount, ResourceBundle, ResourceKind, ResourceOffer,
-    ResourceRegistration, ResourceRegistry,
+    match_demand, LatencyClass, MeteredAmount, RankedOffer, ResourceAmount, ResourceBundle,
+    ResourceDemand, ResourceKind, ResourceMatch, ResourceOffer, ResourceRegistration,
+    ResourceRegistry,
 };
 pub use service::{Market, MarketConfig, MarketStats};
 

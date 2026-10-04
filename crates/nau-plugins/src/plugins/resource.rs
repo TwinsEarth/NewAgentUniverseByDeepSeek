@@ -25,7 +25,8 @@
 //! other four releases are expressed in.
 
 use nau_market::{
-    MarketConfig, ResourceKind, ResourceOffer, ResourceRegistration, ResourceRegistry,
+    MarketConfig, ResourceDemand, ResourceKind, ResourceOffer, ResourceRegistration,
+    ResourceRegistry,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -47,6 +48,9 @@ pub const OPERATIONS: &[&str] = &[
     "register",
     "admitted",
     "slash",
+    // D-04: the matcher, reachable. An eligibility filter nothing calls is a rule nobody can be
+    // refused by.
+    "match",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -336,6 +340,57 @@ impl SystemPlugin for ResourcePlugin {
                     }),
                 ))
             }
+            "match" => {
+                let demand: ResourceDemand =
+                    serde_json::from_value(payload::field(&msg.payload, "demand")?.clone())
+                        .map_err(|e| {
+                            payload::protocol(
+                                "malformed_demand",
+                                format!(
+                                    "a demand needs a kind, a quantity and a latency class: {e}"
+                                ),
+                            )
+                        })?;
+                // The reputations are the CALLER's for now, and that is a limitation rather than a
+                // design: this body holds no reputation store, and reaching into the market's would
+                // be the second source of truth D-09 is about. Stated here rather than left for a
+                // reader to infer from the absence of a lookup.
+                let reputations: std::collections::BTreeMap<String, u32> = msg
+                    .payload
+                    .get("reputations")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let target_secs = payload::optional_u64(&msg.payload, "target_secs")?.unwrap_or(30);
+                let matched =
+                    nau_market::match_demand(&demand, &self.registry, &reputations, target_secs);
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "winner": matched.winner.as_ref().map(|w| json!({
+                            "provider": w.provider,
+                            "price_minor": w.price.minor(),
+                            "score": w.score.to_string(),
+                        })),
+                        "ranked": matched.ranked.iter().map(|r| json!({
+                            "provider": r.provider,
+                            "price_minor": r.price.minor(),
+                            "score": r.score.to_string(),
+                        })).collect::<Vec<_>>(),
+                        // Never silently dropped, which is what makes the first criterion
+                        // checkable at all: an interactive task's exclusion of a tolerant node is
+                        // a fact the answer carries.
+                        "excluded": matched.excluded.iter().map(|(p, why)| json!({
+                            "provider": p,
+                            "why": why,
+                        })).collect::<Vec<_>>(),
+                        "latency_wanted": demand.latency.label(),
+                        "reputations_source": "the request, for now: this body holds no reputation \
+                                               store, and reaching into the market's would be the \
+                                               second source of truth D-09 is about",
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }
@@ -357,6 +412,8 @@ mod tests {
             amount: ResourceAmount::of(ResourceKind::Cpu, 100).expect("amount"),
             price: nau_core::domain::Money::from_minor(500),
             expires_in: 60,
+            latency: nau_market::LatencyClass::Standard,
+            eta_secs: 30,
         }
     }
 

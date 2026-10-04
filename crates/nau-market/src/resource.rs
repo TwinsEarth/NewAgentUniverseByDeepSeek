@@ -321,6 +321,13 @@ pub struct ResourceOffer {
     /// How long the offer stands, in seconds. Zero is refused: an offer with no expiry is one the
     /// provider cannot withdraw by letting it lapse.
     pub expires_in: u64,
+    /// The latency class this offer can serve.
+    ///
+    /// An offer without one would be one a matcher had to guess at, and guessing permissive is the
+    /// direction that puts an interactive task on a batch node.
+    pub latency: LatencyClass,
+    /// How long the provider promises to take, in seconds. Positive.
+    pub eta_secs: u64,
 }
 
 impl ResourceOffer {
@@ -344,6 +351,13 @@ impl ResourceOffer {
                     .to_string(),
             ));
         }
+        if self.eta_secs == 0 {
+            return Err(NauError::Validation(
+                "an offer must promise a positive completion time; a zero would score as \
+                 instantaneous, which no provider can be"
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -355,6 +369,246 @@ impl ResourceOffer {
     #[must_use]
     pub fn unit_price_ratio(&self) -> (i64, u64) {
         (self.price.minor(), self.amount.quantity())
+    }
+}
+
+/// How much a task or an offer cares about latency.
+///
+/// # Not `nau_plugin`'s `PriorityClass`
+///
+/// That type orders **message delivery inside the plugin bus**. This one says how long a piece of
+/// work may take. They are different axes — a `Critical` message says nothing about whether the
+/// task producing it tolerates a second of delay — and giving this one the other one's name would
+/// invite exactly that confusion.
+///
+/// # Ordered by strictness, so "at least this good" is expressible
+///
+/// [`LatencyClass::Interactive`] is the **strictest**. The ordering is the point: D-04's first
+/// criterion is that an interactive task must not be matched to a tolerant node, and that check is
+/// a comparison rather than a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatencyClass {
+    /// A person is waiting. The strictest class.
+    Interactive,
+    /// Ordinary work.
+    Standard,
+    /// Batch work that may wait. The most permissive.
+    Tolerant,
+}
+
+impl LatencyClass {
+    /// Every class, strictest first.
+    pub const ALL: [LatencyClass; 3] = [
+        LatencyClass::Interactive,
+        LatencyClass::Standard,
+        LatencyClass::Tolerant,
+    ];
+
+    /// A stable label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            LatencyClass::Interactive => "interactive",
+            LatencyClass::Standard => "standard",
+            LatencyClass::Tolerant => "tolerant",
+        }
+    }
+
+    /// Whether a node of class `self` can serve a task of class `wanted`.
+    ///
+    /// **A node may serve a task that is more permissive than itself and never one that is
+    /// stricter.** An interactive node can do batch work — it is fast enough for both — while a
+    /// tolerant node has said it may take its time, and a task that said otherwise must not be
+    /// handed to it.
+    ///
+    /// This is the whole of D-04's first criterion, expressed as one comparison rather than as a
+    /// table that could be written the other way round.
+    #[must_use]
+    pub fn can_serve(self, wanted: LatencyClass) -> bool {
+        wanted >= self
+    }
+}
+
+/// A request for resources, with the latency it tolerates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceDemand {
+    /// What is wanted.
+    pub amount: ResourceAmount,
+    /// How much latency the work tolerates.
+    pub latency: LatencyClass,
+    /// The most that may be paid, in minor units. Zero means no cap is expressed, which is
+    /// deliberate: a demand that must name a budget would make every caller invent one.
+    #[serde(default)]
+    pub max_price_minor: i64,
+    /// The least reputation a provider must have, in basis points. Zero means no floor.
+    #[serde(default)]
+    pub min_reputation_bps: u32,
+}
+
+impl ResourceDemand {
+    /// A demand with no price cap and no reputation floor.
+    ///
+    /// # Errors
+    ///
+    /// As [`ResourceAmount::of`].
+    pub fn of(kind: ResourceKind, quantity: u64, latency: LatencyClass) -> Result<Self> {
+        Ok(Self {
+            amount: ResourceAmount::of(kind, quantity)?,
+            latency,
+            max_price_minor: 0,
+            min_reputation_bps: 0,
+        })
+    }
+
+    /// Whether an offer is **eligible** — a hard question, not a score.
+    ///
+    /// # What this is not
+    ///
+    /// It is not a penalty. The existing bid path **disfavours** a slow bid and lets it win anyway
+    /// if it is cheap enough, which is right for a market where everything is a trade-off. D-04
+    /// asks for something the bid path does not do: an interactive task must **not be matched** to
+    /// a tolerant node, and "must not" is a filter rather than a weight.
+    ///
+    /// The two coexist. A score ranks what is eligible; this decides what is eligible at all.
+    ///
+    /// No `#[must_use]`, because `Result` already carries one: the attribute here would be a second
+    /// statement of the same thing, which is what clippy pointed out rather than what I noticed.
+    pub fn admits(
+        &self,
+        offer: &ResourceOffer,
+        reputation_bps: u32,
+    ) -> std::result::Result<(), String> {
+        if offer.amount.kind() != self.amount.kind() {
+            return Err(format!(
+                "the offer is {} and the demand is {}",
+                offer.amount.kind().label(),
+                self.amount.kind().label()
+            ));
+        }
+        if !offer.latency.can_serve(self.latency) {
+            return Err(format!(
+                "a `{}` node cannot serve a `{}` task: it has said it may take its time, and the \
+                 task said otherwise",
+                offer.latency.label(),
+                self.latency.label()
+            ));
+        }
+        if self.max_price_minor > 0 && offer.price.minor() > self.max_price_minor {
+            return Err(format!(
+                "the offer asks {} and the demand caps at {}",
+                offer.price.minor(),
+                self.max_price_minor
+            ));
+        }
+        if reputation_bps < self.min_reputation_bps {
+            return Err(format!(
+                "reputation {reputation_bps} bps is below the floor {}",
+                self.min_reputation_bps
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One eligible offer, with the score that ordered it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedOffer {
+    /// Who is offering.
+    pub provider: String,
+    /// What it costs.
+    pub price: Money,
+    /// The integer score, higher first.
+    pub score: i128,
+}
+
+/// The result of matching a demand against a registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceMatch {
+    /// The winning provider, if any offer was eligible.
+    pub winner: Option<RankedOffer>,
+    /// Every eligible offer, best first.
+    pub ranked: Vec<RankedOffer>,
+    /// Providers that were **not** eligible, with the reason. Never silently dropped — the same
+    /// rule the bid path follows, and the reason D-04's first criterion is checkable at all.
+    pub excluded: Vec<(String, String)>,
+}
+
+/// How many offers were excluded.
+impl ResourceMatch {
+    /// Whether anything was eligible.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ranked.is_empty()
+    }
+
+    /// The providers excluded, by name.
+    #[must_use]
+    pub fn excluded_providers(&self) -> Vec<&str> {
+        self.excluded.iter().map(|(p, _)| p.as_str()).collect()
+    }
+}
+
+/// Match a demand against a registry, deterministically.
+///
+/// # The score is the bid path's formula, called rather than copied
+///
+/// [`crate::matching::score_value`] is the one implementation of "reputation per unit price,
+/// discounted by how far the promise runs past the target". Both this and
+/// [`crate::matching::rank_bids`] call it, so there is **one** pricing rule and not two that would
+/// drift — which is what D-04's third criterion asks for, expressed as a shared function rather
+/// than as a promise to keep two sorts in step.
+///
+/// # Determinism
+///
+/// Ties are broken by provider name, and the excluded list is sorted, so the output depends only on
+/// the set of registrations and not on the order they were inserted. A recorded match whose
+/// ordering could change between runs would be one nobody could re-derive.
+#[must_use]
+pub fn match_demand(
+    demand: &ResourceDemand,
+    registry: &ResourceRegistry,
+    reputations: &BTreeMap<String, u32>,
+    target_secs: u64,
+) -> ResourceMatch {
+    let mut ranked: Vec<RankedOffer> = Vec::new();
+    let mut excluded: Vec<(String, String)> = Vec::new();
+
+    for registration in registry.available(demand.amount.kind()) {
+        let provider = registration.provider.clone();
+        let reputation_bps = reputations.get(&provider).copied().unwrap_or(0);
+        match demand.admits(&registration.offer, reputation_bps) {
+            Ok(()) => {
+                let score = crate::matching::score_value(
+                    reputation_bps,
+                    registration.offer.price.minor(),
+                    registration.offer.eta_secs,
+                    target_secs.max(1),
+                );
+                ranked.push(RankedOffer {
+                    provider,
+                    price: registration.offer.price,
+                    score,
+                });
+            }
+            Err(why) => excluded.push((provider, why)),
+        }
+    }
+
+    // Highest score first; ties by name, because a sort that left equals in map order would depend
+    // on insertion history.
+    ranked.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.provider.cmp(&b.provider))
+    });
+    excluded.sort();
+
+    let winner = ranked.first().cloned();
+    ResourceMatch {
+        winner,
+        ranked,
+        excluded,
     }
 }
 
@@ -767,6 +1021,8 @@ mod tests {
             amount,
             price: Money::from_minor(0),
             expires_in: 60,
+            latency: LatencyClass::Standard,
+            eta_secs: 30,
         };
         assert!(free.validate().is_err(), "a free offer is not an offer");
 
@@ -798,6 +1054,8 @@ mod tests {
             amount: ResourceAmount::of(ResourceKind::Cpu, 3).expect("amount"),
             price: Money::from_minor(10),
             expires_in: 60,
+            latency: LatencyClass::Standard,
+            eta_secs: 30,
         };
         assert_eq!(offer.unit_price_ratio(), (10, 3));
     }
@@ -844,6 +1102,8 @@ mod tests {
                 amount: ResourceAmount::of(ResourceKind::Cpu, 100).expect("amount"),
                 price: Money::from_minor(500),
                 expires_in: 60,
+                latency: LatencyClass::Standard,
+                eta_secs: 30,
             },
             stake: Money::from_minor(stake_minor),
             registered_at: 1,
@@ -1012,6 +1272,8 @@ mod tests {
                         amount: ResourceAmount::of(kind, 10).expect("amount"),
                         price: Money::from_minor(price),
                         expires_in: 60,
+                        latency: LatencyClass::Standard,
+                        eta_secs: 30,
                     },
                     ..registration(provider, config.min_stake.minor())
                 })
@@ -1111,6 +1373,231 @@ mod tests {
         );
         let back: ResourceRegistration = serde_json::from_str(&text).expect("deserialises");
         assert_eq!(back, registration);
+    }
+
+    // ------------------------------------------------------------ D-04
+
+    fn offer_of(
+        provider: &str,
+        latency: LatencyClass,
+        price_minor: i64,
+        eta: u64,
+    ) -> ResourceOffer {
+        ResourceOffer {
+            provider: provider.to_string(),
+            amount: ResourceAmount::of(ResourceKind::Cpu, 100).expect("amount"),
+            price: Money::from_minor(price_minor),
+            expires_in: 60,
+            latency,
+            eta_secs: eta,
+        }
+    }
+
+    fn registry_with(offers: Vec<ResourceOffer>) -> ResourceRegistry {
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        for offer in offers {
+            registry
+                .register(ResourceRegistration {
+                    provider: offer.provider.clone(),
+                    offer,
+                    stake: config.min_stake,
+                    registered_at: 1,
+                })
+                .expect("registered");
+        }
+        registry
+    }
+
+    #[test]
+    fn an_interactive_task_is_not_matched_to_a_tolerant_node() {
+        // D-04's first criterion, and the difference from the bid path matters: `rank_bids`
+        // DISFAVOURS a slow bid and lets it win anyway if it is cheap enough. "Must not be matched"
+        // is a filter rather than a weight.
+        let registry = registry_with(vec![
+            // Half the price of the interactive node, and ten times slower.
+            offer_of("did:example:cheap", LatencyClass::Tolerant, 100, 600),
+            offer_of("did:example:fast", LatencyClass::Interactive, 200, 5),
+        ]);
+        let demand =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Interactive).expect("demand");
+
+        let matched = match_demand(&demand, &registry, &BTreeMap::new(), 30);
+        assert_eq!(
+            matched.winner.as_ref().map(|w| w.provider.as_str()),
+            Some("did:example:fast"),
+            "an interactive task must go to the interactive node"
+        );
+        assert!(
+            matched.excluded_providers().contains(&"did:example:cheap"),
+            "and the tolerant node must be EXCLUDED rather than merely outscored: {:?}",
+            matched.excluded
+        );
+        let why = &matched
+            .excluded
+            .iter()
+            .find(|(p, _)| p == "did:example:cheap")
+            .expect("named")
+            .1;
+        assert!(
+            why.contains("cannot serve"),
+            "the exclusion must say why, got: {why}"
+        );
+        assert!(
+            why.contains("tolerant") && why.contains("interactive"),
+            "and must name both classes, got: {why}"
+        );
+    }
+
+    #[test]
+    fn a_stricter_node_may_serve_a_more_permissive_task() {
+        // The other direction, because a rule that only ever refused would be indistinguishable
+        // from a broken one. An interactive node is fast enough for batch work.
+        assert!(LatencyClass::Interactive.can_serve(LatencyClass::Tolerant));
+        assert!(LatencyClass::Interactive.can_serve(LatencyClass::Interactive));
+        assert!(LatencyClass::Tolerant.can_serve(LatencyClass::Tolerant));
+        assert!(
+            !LatencyClass::Tolerant.can_serve(LatencyClass::Interactive),
+            "a node that said it may take its time must not take work that said otherwise"
+        );
+        assert!(LatencyClass::Standard.can_serve(LatencyClass::Tolerant));
+        assert!(!LatencyClass::Standard.can_serve(LatencyClass::Interactive));
+
+        // And through the matcher, not only through the predicate.
+        let registry = registry_with(vec![offer_of(
+            "did:example:fast",
+            LatencyClass::Interactive,
+            500,
+            5,
+        )]);
+        let tolerant =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Tolerant).expect("demand");
+        let matched = match_demand(&tolerant, &registry, &BTreeMap::new(), 30);
+        assert_eq!(
+            matched.winner.expect("a winner").provider,
+            "did:example:fast"
+        );
+        assert!(matched.excluded.is_empty());
+    }
+
+    #[test]
+    fn the_match_is_deterministic_including_the_excluded_list() {
+        // D-04's second criterion. A recorded match whose ordering could change between runs is one
+        // nobody could re-derive -- and the EXCLUDED list matters as much as the ranked one, since
+        // it is what a losing provider would be shown.
+        let registry = registry_with(vec![
+            offer_of("did:example:z", LatencyClass::Interactive, 300, 5),
+            offer_of("did:example:a", LatencyClass::Interactive, 300, 5),
+            offer_of("did:example:m", LatencyClass::Interactive, 300, 5),
+            offer_of("did:example:slow1", LatencyClass::Tolerant, 10, 900),
+            offer_of("did:example:slow2", LatencyClass::Tolerant, 10, 900),
+        ]);
+        let demand =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Interactive).expect("demand");
+
+        let first = match_demand(&demand, &registry, &BTreeMap::new(), 30);
+        for _ in 0..8 {
+            let again = match_demand(&demand, &registry, &BTreeMap::new(), 30);
+            assert_eq!(first, again, "the same input must give the same match");
+        }
+        // Equal scores are broken by name rather than left in map order.
+        let order: Vec<&str> = first.ranked.iter().map(|r| r.provider.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["did:example:a", "did:example:m", "did:example:z"]
+        );
+        // And the excluded list is sorted, so it does not depend on insertion history either.
+        let excluded: Vec<&str> = first.excluded_providers();
+        assert_eq!(excluded, vec!["did:example:slow1", "did:example:slow2"]);
+    }
+
+    #[test]
+    fn the_score_is_the_same_function_the_bid_path_calls() {
+        // D-04's third criterion. "Reuse" cannot mean calling `rank_bids`, whose inputs are
+        // Task/Bid/AgentCard -- a resource offer is none of those -- so it means what it can
+        // honestly mean: one implementation of the formula, called from both places.
+        //
+        // Asserted by calling it directly and finding its answer in the match.
+        let registry = registry_with(vec![offer_of(
+            "did:example:p",
+            LatencyClass::Standard,
+            1_000,
+            10,
+        )]);
+        let demand =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Standard).expect("demand");
+        let reputations: BTreeMap<String, u32> =
+            [("did:example:p".to_string(), 5_000)].into_iter().collect();
+
+        let target = 30;
+        let matched = match_demand(&demand, &registry, &reputations, target);
+        let expected = crate::matching::score_value(5_000, 1_000, 10, target);
+        assert_eq!(matched.winner.expect("a winner").score, expected);
+
+        // And the formula itself behaves the way its documentation says: a higher reputation scores
+        // higher, a higher price scores lower, and being late is penalised.
+        assert!(
+            crate::matching::score_value(9_000, 1_000, 10, 30)
+                > crate::matching::score_value(1_000, 1_000, 10, 30)
+        );
+        assert!(
+            crate::matching::score_value(5_000, 100, 10, 30)
+                > crate::matching::score_value(5_000, 1_000, 10, 30)
+        );
+        assert!(
+            crate::matching::score_value(5_000, 1_000, 10, 30)
+                > crate::matching::score_value(5_000, 1_000, 900, 30)
+        );
+        // A non-positive price is the one input the formula cannot speak about.
+        assert_eq!(crate::matching::score_value(5_000, 0, 10, 30), 0);
+    }
+
+    #[test]
+    fn a_demand_that_caps_its_price_or_its_providers_excludes_by_that_too() {
+        // The other two filters, because a `max_price_minor` that only appeared in an answer would
+        // be one nobody could rely on.
+        let registry = registry_with(vec![
+            offer_of("did:example:pricey", LatencyClass::Standard, 9_000, 5),
+            offer_of("did:example:cheap", LatencyClass::Standard, 100, 5),
+        ]);
+        let mut demand =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Standard).expect("demand");
+        demand.max_price_minor = 1_000;
+        let matched = match_demand(&demand, &registry, &BTreeMap::new(), 30);
+        // Borrowed rather than moved, because the excluded list is read after it and a `clone()`
+        // here would hide which of the two the assertion is really about.
+        assert_eq!(
+            matched.winner.as_ref().map(|w| w.provider.as_str()),
+            Some("did:example:cheap")
+        );
+        assert_eq!(matched.excluded_providers(), vec!["did:example:pricey"]);
+
+        // The reputation floor, with a provider the map has never heard of -- which is a reputation
+        // of zero and therefore below any positive floor.
+        let mut floored =
+            ResourceDemand::of(ResourceKind::Cpu, 10, LatencyClass::Standard).expect("demand");
+        floored.min_reputation_bps = 1;
+        let unknown = match_demand(&floored, &registry, &BTreeMap::new(), 30);
+        assert!(unknown.is_empty(), "an unknown provider has no reputation");
+        assert_eq!(unknown.excluded.len(), 2);
+
+        // And a demand for a different kind excludes everything, naming why.
+        let wrong_kind =
+            ResourceDemand::of(ResourceKind::Snapshot, 1, LatencyClass::Standard).expect("demand");
+        let none = match_demand(&wrong_kind, &registry, &BTreeMap::new(), 30);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn an_offer_must_promise_a_positive_completion_time() {
+        // A zero ETA would score as instantaneous, which no provider can be.
+        let mut offer = offer_of("did:example:p", LatencyClass::Standard, 100, 1);
+        offer.eta_secs = 0;
+        let err = offer.validate().expect_err("must refuse a zero ETA");
+        assert!(
+            format!("{err}").contains("positive completion time"),
+            "got: {err}"
+        );
     }
 
     #[test]
