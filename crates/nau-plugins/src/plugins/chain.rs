@@ -70,7 +70,14 @@ fn store_error(what: &str, error: nau_core::NauError) -> nau_plugin::PluginError
 }
 
 /// The operations this plugin implements, for the unknown-operation refusal.
-pub const OPERATIONS: &[&str] = &["config", "precheck", "record_anchor", "list_anchors"];
+pub const OPERATIONS: &[&str] = &[
+    "config",
+    "precheck",
+    "record_anchor",
+    "list_anchors",
+    // E-04: the reconciliation, and the shape that refuses to resolve anything.
+    "reconcile",
+];
 
 /// Error code: the anchor log could not be read, written or encoded.
 pub const CODE_ANCHOR_LOG: &str = "chain_anchor_log";
@@ -329,6 +336,72 @@ impl SystemPlugin for ChainPlugin {
                 self.grant
                     .require_operation(declared, Capability::ChainEvmRead)?;
                 self.list_anchors(&msg.payload)
+            }
+            // E-04. The ledger's figure is REQUIRED and the chain's side is optional, which is the
+            // direction of authority expressed in the signature: a caller cannot even ask this
+            // question without saying what the ledger holds.
+            "reconcile" => {
+                let ledger_minor = i64::try_from(
+                    payload::optional_u64(&msg.payload, "ledger_minor")?.ok_or_else(|| {
+                        payload::protocol(
+                            "ledger_side_required",
+                            "`nau-ledger` is the source of truth, so its figure is required: a \
+                                 reconciliation that did not know what the ledger says would have \
+                                 nothing to reconcile against",
+                        )
+                    })?,
+                )
+                .unwrap_or(i64::MAX);
+                // The chain side is optional BECAUSE this workspace has no Rust-side chain client.
+                // Absent is not "assume fine": `reconcile` turns it into a refusal.
+                //
+                // The presence test is `Value::is_null` rather than a missing-key check, so that a
+                // caller who wrote `"chain_events": null` and one who omitted the key both mean the
+                // same thing: no chain side. Inventing a difference between those two spellings
+                // would be a distinction nobody asked for, and `payload` has no optional-array
+                // helper precisely because most callers want the required one.
+                let chain_events = match msg.payload.get("chain_events") {
+                    Some(value) if !value.is_null() => {
+                        Some(payload::string_array(&msg.payload, "chain_events")?)
+                    }
+                    _ => None,
+                };
+                let chain_total_minor = payload::optional_u64(&msg.payload, "chain_total_minor")?
+                    .map(|v| i64::try_from(v).unwrap_or(i64::MAX));
+                let outcome = reconcile(ledger_minor, chain_events.as_deref(), chain_total_minor);
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "agreed": outcome.is_agreed(),
+                        "blocks": outcome.blocks(),
+                        "reason": outcome.reason(),
+                        "detail": match &outcome {
+                            Reconciliation::Agreed { amount_minor, events } => json!({
+                                "amount_minor": amount_minor,
+                                "events": events,
+                            }),
+                            Reconciliation::Mismatched {
+                                ledger_minor,
+                                chain_minor,
+                                difference,
+                            } => json!({
+                                "ledger_minor": ledger_minor,
+                                "chain_minor": chain_minor,
+                                "difference": difference,
+                            }),
+                            Reconciliation::CannotReconcile { .. } => json!(null),
+                        },
+                        "no_third_way": "there is no variant that resolves a disagreement: trusting \
+                                         the chain and trusting the ledger are both refused, \
+                                         because `nau-ledger` is the source of truth and the chain \
+                                         is execution",
+                        "read_performed": false,
+                        "why_no_read": "this workspace has no Rust-side chain client, so on-chain \
+                                        events reach a caller from somewhere else entirely -- and \
+                                        an absent side blocks rather than passing by omission",
+                    }),
+                ))
             }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
@@ -730,6 +803,291 @@ fn calldata_check(data: Option<&str>) -> (bool, Value) {
                 "checked_by": "hex::decode",
             }),
         ),
+    }
+}
+
+/// What a reconciliation found, and there is no fourth answer.
+///
+/// # E-04's second criterion, and the shape it forces
+///
+/// "A reconciliation mismatch is **refused** (fail-closed); it must not resolve by trusting the chain
+/// and must not resolve by trusting the local record."
+///
+/// The strongest form of that is a result type with **no variant that resolves anything**:
+///
+/// * [`Reconciliation::Agreed`] requires **both sides present and equal**. It is not a default.
+/// * [`Reconciliation::Mismatched`] carries **both figures** and a description of the difference. It
+///   has no field for a chosen value, because choosing one is the thing being refused.
+/// * [`Reconciliation::CannotReconcile`] covers **the side that is missing** — and this is the case
+///   that matters most in this workspace, because there is no Rust-side chain client here. "I have
+///   nothing to compare against" is **not** agreement, and a type with an `Unknown` that callers
+///   treated as fine would be one where the absent case passed by omission.
+///
+/// # E-04's first criterion
+///
+/// `nau-ledger` is the only source of truth and the chain is execution. That is why
+/// [`Reconciliation::Mismatched`] names the ledger's figure **first** and the chain's second: the
+/// order is the direction of authority, and a caller reading the struct meets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reconciliation {
+    /// Both sides present, and equal.
+    Agreed {
+        /// The ledger's figure, which happens to equal the chain's here.
+        amount_minor: i64,
+        /// How many on-chain events were compared.
+        events: usize,
+    },
+    /// Both sides present, and different. **Nothing is resolved.**
+    Mismatched {
+        /// What the ledger says, which is the authority.
+        ledger_minor: i64,
+        /// What the chain's events add up to.
+        chain_minor: i64,
+        /// What differs, in words, so a human can act without re-deriving it.
+        difference: String,
+    },
+    /// One side is missing, so there is nothing to compare.
+    CannotReconcile {
+        /// Why not. A sentence a caller can act on.
+        reason: String,
+    },
+}
+
+impl Reconciliation {
+    /// Whether this is agreement.
+    ///
+    /// **The only predicate that returns true**, so a caller that wants "may I proceed?" has exactly
+    /// one thing to ask and cannot accidentally treat a mismatch or an absence as one.
+    #[must_use]
+    pub fn is_agreed(&self) -> bool {
+        matches!(self, Reconciliation::Agreed { .. })
+    }
+
+    /// Whether this blocks.
+    ///
+    /// Everything that is not agreement blocks, which is the fail-closed direction: a variant added
+    /// later blocks unless someone deliberately adds it to `is_agreed` as well.
+    #[must_use]
+    pub fn blocks(&self) -> bool {
+        !self.is_agreed()
+    }
+
+    /// Why it blocks, or `None` when it does not.
+    #[must_use]
+    pub fn reason(&self) -> Option<String> {
+        match self {
+            Reconciliation::Agreed { .. } => None,
+            Reconciliation::Mismatched {
+                ledger_minor,
+                chain_minor,
+                difference,
+            } => Some(format!(
+                "the ledger says {ledger_minor} and the chain's events say {chain_minor}: \
+                 {difference}. Nothing is resolved -- trusting either side would be choosing which \
+                 book to believe, and `nau-ledger` is the source of truth while the chain is \
+                 execution"
+            )),
+            Reconciliation::CannotReconcile { reason } => Some(reason.clone()),
+        }
+    }
+}
+
+/// Reconcile an off-chain figure against on-chain events.
+///
+/// # The signature is the design
+///
+/// `chain_events` is an `Option` **because this workspace has no Rust-side chain client** and a
+/// caller may genuinely have nothing to hand. `None` is not "assume fine": it produces
+/// [`Reconciliation::CannotReconcile`], which blocks.
+///
+/// `chain_total_minor` is passed in rather than computed here, because computing it would need to
+/// decode logs — and this module's own documentation records that nothing in `crates/` speaks
+/// JSON-RPC or encodes ABI calldata. A function that pretended to add up events it could not read
+/// would be exactly the defect this door exists to refuse.
+///
+/// # E-04's third criterion
+///
+/// The invariants E-04 points at are `contracts/test/SettlementInvariant.t.sol`, and they are
+/// **Solidity-side**: they hold the contract's own accounting to its conservation law. What this
+/// function reconciles is the **pairing** of that accounting with the ledger's. The two are different
+/// checks at different layers and neither substitutes for the other — a contract whose invariants
+/// hold can still disagree with the ledger about what happened, and that disagreement is what this
+/// refuses.
+#[must_use]
+pub fn reconcile(
+    ledger_minor: i64,
+    chain_events: Option<&[String]>,
+    chain_total_minor: Option<i64>,
+) -> Reconciliation {
+    let (Some(events), Some(chain_minor)) = (chain_events, chain_total_minor) else {
+        return Reconciliation::CannotReconcile {
+            reason: "one side of the comparison is missing: this workspace has no Rust-side chain \
+                     client, so on-chain events reach a caller from somewhere else entirely -- and \
+                     an absent side is NOT agreement. Reconciling against data one does not have \
+                     would be the failure this check exists to prevent."
+                .to_string(),
+        };
+    };
+    if events.is_empty() {
+        return Reconciliation::CannotReconcile {
+            reason:
+                "the chain side is present but empty, which is not the same as agreeing: a task \
+                     with no on-chain events is one the chain has no record of, and the ledger \
+                     having a record of it is precisely a disagreement"
+                    .to_string(),
+        };
+    }
+    if ledger_minor == chain_minor {
+        return Reconciliation::Agreed {
+            amount_minor: ledger_minor,
+            events: events.len(),
+        };
+    }
+    Reconciliation::Mismatched {
+        ledger_minor,
+        chain_minor,
+        difference: format!(
+            "the difference is {} minor units over {} on-chain event(s)",
+            (i128::from(ledger_minor) - i128::from(chain_minor)).abs(),
+            events.len()
+        ),
+    }
+}
+
+#[cfg(test)]
+mod reconciliation_tests {
+    use super::*;
+
+    fn events() -> Vec<String> {
+        vec!["TaskSettled".to_string(), "TaskRefunded".to_string()]
+    }
+
+    #[test]
+    fn agreement_requires_both_sides_present_and_equal() {
+        // E-04's second criterion: `Agreed` is not a default and not an absence.
+        let agreed = reconcile(1_000, Some(&events()), Some(1_000));
+        assert!(agreed.is_agreed());
+        assert!(!agreed.blocks());
+        assert_eq!(agreed.reason(), None);
+        match agreed {
+            Reconciliation::Agreed {
+                amount_minor,
+                events,
+            } => {
+                assert_eq!(amount_minor, 1_000);
+                assert_eq!(events, 2, "how many events were compared");
+            }
+            other => panic!("expected agreement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_side_is_not_agreement() {
+        // The case that matters most here, because there is no Rust-side chain client: "I have
+        // nothing to compare against" must not pass by omission.
+        for missing in [
+            reconcile(1_000, None, Some(1_000)),
+            reconcile(1_000, Some(&events()), None),
+            reconcile(1_000, None, None),
+        ] {
+            assert!(missing.blocks(), "{missing:?} must block");
+            assert!(!missing.is_agreed());
+            let reason = missing.reason().expect("a reason");
+            assert!(reason.contains("missing"), "{reason}");
+            assert!(
+                reason.contains("NOT agreement"),
+                "and must say the absence is not agreement: {reason}"
+            );
+        }
+
+        // An EMPTY chain side is also not agreement: a task the chain has no record of, which the
+        // ledger does, is a disagreement rather than an absence of information.
+        let empty = reconcile(1_000, Some(&[]), Some(0));
+        assert!(empty.blocks());
+        assert!(
+            empty
+                .reason()
+                .expect("a reason")
+                .contains("no on-chain events"),
+            "{:?}",
+            empty.reason()
+        );
+    }
+
+    #[test]
+    fn a_mismatch_names_both_figures_and_resolves_nothing() {
+        // The criterion's actual wording: it must not resolve by trusting the chain and must not
+        // resolve by trusting the local record. What it carries is both figures and a description --
+        // there is no field for a chosen value, because choosing one is the thing being refused.
+        let mismatch = reconcile(1_000, Some(&events()), Some(900));
+        assert!(mismatch.blocks());
+        let reason = mismatch.reason().expect("a reason");
+        assert!(reason.contains("ledger says 1000"), "{reason}");
+        assert!(reason.contains("chain's events say 900"), "{reason}");
+        assert!(reason.contains("Nothing is resolved"), "{reason}");
+        assert!(
+            reason.contains("choosing which book to believe"),
+            "and must say why resolving would be wrong: {reason}"
+        );
+        assert!(
+            reason.contains("source of truth"),
+            "and must name which book is which: {reason}"
+        );
+        match mismatch {
+            Reconciliation::Mismatched {
+                ledger_minor,
+                chain_minor,
+                difference,
+            } => {
+                assert_eq!(ledger_minor, 1_000);
+                assert_eq!(chain_minor, 900);
+                assert!(difference.contains("100 minor units"), "{difference}");
+                assert!(difference.contains("2 on-chain event"), "{difference}");
+            }
+            other => panic!("expected a mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_direction_of_the_comparison_is_the_direction_of_authority() {
+        // E-04's first criterion arriving in the shape: the ledger's figure is named first and the
+        // struct's fields are in that order, so a caller reading them meets the authority first.
+        let mismatch = reconcile(500, Some(&events()), Some(600));
+        match mismatch {
+            Reconciliation::Mismatched {
+                ledger_minor,
+                chain_minor,
+                ..
+            } => {
+                assert_eq!(ledger_minor, 500, "the ledger's figure is the first field");
+                assert_eq!(chain_minor, 600);
+            }
+            other => panic!("expected a mismatch, got {other:?}"),
+        }
+        // And the sign of the difference does not change the answer: a chain ahead of the ledger
+        // blocks exactly as one behind it does.
+        assert!(reconcile(500, Some(&events()), Some(600)).blocks());
+        assert!(reconcile(500, Some(&events()), Some(400)).blocks());
+    }
+
+    #[test]
+    fn everything_that_is_not_agreement_blocks() {
+        // The fail-closed direction, asserted as a property rather than case by case: `blocks` is
+        // defined as the negation of `is_agreed`, so a variant added later blocks unless someone
+        // deliberately adds it to `is_agreed` too.
+        for result in [
+            reconcile(1_000, Some(&events()), Some(1_000)),
+            reconcile(1_000, Some(&events()), Some(999)),
+            reconcile(1_000, None, Some(1_000)),
+            reconcile(0, Some(&events()), Some(0)),
+        ] {
+            assert_eq!(
+                result.blocks(),
+                !result.is_agreed(),
+                "the two predicates must be exact negations: {result:?}"
+            );
+            assert_eq!(result.reason().is_none(), result.is_agreed(), "{result:?}");
+        }
     }
 }
 

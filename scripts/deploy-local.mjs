@@ -1916,6 +1916,120 @@ async function main() {
     return `three capabilities, none available, and the platform question answered where it runs`;
   });
 
+  // E-04's three criteria. The second is the one worth attacking: a mismatch must be REFUSED, and so
+  // must an absent side -- there is no variant that resolves either, and the check proves that by
+  // looking for one.
+  await check('a reconciliation refuses a mismatch and refuses an absent side, and resolves neither', async () => {
+    const chain = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.chain/call', body);
+
+    // Agreement requires BOTH sides present and equal.
+    const agreed = await chain({
+      capability: 'plugin:lifecycle:read',
+      op: 'reconcile',
+      ledger_minor: 1000,
+      chain_events: ['TaskSettled', 'TaskRefunded'],
+      chain_total_minor: 1000,
+    });
+    assert(
+      agreed.status >= 200 && agreed.status < 300,
+      `reconcile -> HTTP ${agreed.status}: ${agreed.text.slice(0, 220)}`,
+    );
+    assert(agreed.json.agreed === true, `both sides equal must agree: ${agreed.text.slice(0, 200)}`);
+    assert(agreed.json.blocks === false);
+    assert(agreed.json.reason === null, `agreement needs no reason: ${agreed.json.reason}`);
+    assert(agreed.json.detail && agreed.json.detail.events === 2, 'and says how many events');
+
+    // E-04's second criterion, half one: a mismatch blocks, names BOTH figures, and resolves nothing.
+    const mismatch = await chain({
+      capability: 'plugin:lifecycle:read',
+      op: 'reconcile',
+      ledger_minor: 1000,
+      chain_events: ['TaskSettled'],
+      chain_total_minor: 900,
+    });
+    assert(mismatch.json.agreed === false, 'a mismatch must not agree');
+    assert(mismatch.json.blocks === true, 'and must block');
+    const why = String(mismatch.json.reason);
+    assert(why.includes('ledger says 1000') && why.includes("chain's events say 900"), why);
+    assert(why.includes('Nothing is resolved'), why);
+    assert(
+      why.includes('source of truth'),
+      `and must name which book is which: ${why}`,
+    );
+    // The detail carries both figures in the direction of authority: the ledger's first.
+    assert(
+      mismatch.json.detail.ledger_minor === 1000 && mismatch.json.detail.chain_minor === 900,
+      JSON.stringify(mismatch.json.detail),
+    );
+    // And a chain AHEAD of the ledger blocks exactly as one behind it does.
+    const ahead = await chain({
+      capability: 'plugin:lifecycle:read',
+      op: 'reconcile',
+      ledger_minor: 500,
+      chain_events: ['TaskSettled'],
+      chain_total_minor: 600,
+    });
+    assert(ahead.json.blocks === true, 'the sign of the difference must not change the answer');
+
+    // Half two, and the case that matters most here: an ABSENT side is not agreement.
+    for (const body of [
+      { ledger_minor: 1000, chain_total_minor: 1000 },
+      { ledger_minor: 1000, chain_events: ['TaskSettled'] },
+      { ledger_minor: 1000 },
+    ]) {
+      const missing = await chain({
+        capability: 'plugin:lifecycle:read',
+        op: 'reconcile',
+        ...body,
+      });
+      assert(
+        missing.json.agreed === false && missing.json.blocks === true,
+        `an absent side must block, got ${missing.text.slice(0, 200)}`,
+      );
+      assert(
+        String(missing.json.reason).includes('NOT agreement'),
+        `and must say the absence is not agreement: ${missing.json.reason}`,
+      );
+    }
+
+    // An EMPTY chain side is a disagreement rather than an absence of information: the chain has no
+    // record of a task the ledger does.
+    const empty = await chain({
+      capability: 'plugin:lifecycle:read',
+      op: 'reconcile',
+      ledger_minor: 1000,
+      chain_events: [],
+      chain_total_minor: 0,
+    });
+    assert(empty.json.blocks === true, 'an empty chain side must block');
+
+    // E-04's first criterion: the ledger's figure is REQUIRED, so a caller cannot even ask the
+    // question without saying what the ledger holds.
+    const noLedger = await chain({
+      capability: 'plugin:lifecycle:read',
+      op: 'reconcile',
+      chain_events: ['TaskSettled'],
+      chain_total_minor: 1000,
+    });
+    assert(
+      noLedger.status === 400,
+      `the ledger's figure is the source of truth and must be required, got HTTP ${noLedger.status}`,
+    );
+
+    // The absence of a third way, stated by the answer -- and the check proves no read was faked.
+    assert(
+      String(mismatch.json.no_third_way).includes('both refused'),
+      `the answer must state that neither side may be trusted over the other: ${mismatch.json.no_third_way}`,
+    );
+    assert(
+      mismatch.json.read_performed === false,
+      'this door performs no chain read, and every answer must say so',
+    );
+
+    return `agreement needs both sides; a mismatch blocks with both figures; an absent side blocks`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
