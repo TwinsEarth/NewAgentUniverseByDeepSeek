@@ -45,7 +45,9 @@
 use std::collections::BTreeMap;
 
 use nau_core::domain::Money;
+use nau_core::domain::TaskId;
 use nau_core::error::{NauError, Result};
+use nau_ledger::{AccountId, Ledger};
 use serde::{Deserialize, Serialize};
 
 /// One of the six kinds of resource this network trades.
@@ -610,6 +612,243 @@ pub fn match_demand(
         ranked,
         excluded,
     }
+}
+
+// ---------------------------------------------------------------- D-06, snapshots as goods
+
+/// A reusable environment, as something that can be sold.
+///
+/// # Content addressing is the whole of the second criterion
+///
+/// [`SnapshotAsset::snapshot`] is the **content address** a [`SnapshotStore`] filed the environment
+/// under — the same address `ImageManifest` uses for image chunks (A-04) and the same one B-11
+/// records in its audit trail. So "what you bought is what the address names" is not a policy this
+/// type enforces: it is what an address **is**. A buyer that restores the snapshot gets the layers
+/// whose hashes are in the address, and a store that had different bytes under that address would
+/// fail its own verification rather than serve them.
+///
+/// [`SnapshotStore`]: nau_sandbox::SnapshotStore
+///
+/// # The royalty is a share, and the share is exact
+///
+/// [`SnapshotAsset::royalty_of`] is a basis-point share of the price, truncated down, and
+/// [`SnapshotAsset::remainder_of`] is **what is left** rather than a second computation. That order
+/// matters: computing the remainder independently would let the two disagree by a minor unit, and a
+/// settlement whose parts do not add up to its whole is one the ledger's conservation check would
+/// catch — correctly, and late.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotAsset {
+    /// The content address the environment is filed under.
+    pub snapshot: String,
+    /// Who built it, and who is paid each time it is restored.
+    pub author: String,
+    /// Who is offering it, if that is somebody else.
+    ///
+    /// Often the author, and deliberately a separate field: an environment can be resold by a party
+    /// that did not build it, and a type that assumed otherwise would make that impossible.
+    pub seller: String,
+    /// The author's share of each restore, in basis points.
+    pub royalty_bps: u16,
+}
+
+impl SnapshotAsset {
+    /// An asset.
+    ///
+    /// # Errors
+    ///
+    /// [`NauError::Validation`] when the address, the author or the seller is blank, or when the
+    /// royalty exceeds 100% — a share larger than the whole would make the settlement pay out more
+    /// than it took in, which is the money-creation this workspace's ledger refuses.
+    pub fn new(snapshot: &str, author: &str, seller: &str, royalty_bps: u16) -> Result<Self> {
+        if snapshot.trim().is_empty() {
+            return Err(NauError::Validation(
+                "a snapshot asset must name the content address it is filed under; without one \
+                 there is nothing that says what a buyer gets"
+                    .to_string(),
+            ));
+        }
+        if author.trim().is_empty() || seller.trim().is_empty() {
+            return Err(NauError::Validation(
+                "a snapshot asset must name both its author and its seller".to_string(),
+            ));
+        }
+        if royalty_bps > 10_000 {
+            return Err(NauError::Validation(format!(
+                "a royalty of {royalty_bps} bps is more than the whole price, and a settlement \
+                 that paid out more than it took in would be creating money"
+            )));
+        }
+        Ok(Self {
+            snapshot: snapshot.to_string(),
+            author: author.to_string(),
+            seller: seller.to_string(),
+            royalty_bps,
+        })
+    }
+
+    /// The author's share of `price`, truncated **down**.
+    ///
+    /// Down rather than nearest, for the reason every other division in this workspace truncates:
+    /// the house never collects a fraction it did not compute, and the direction is stated here
+    /// rather than left to whichever integer division the language chose.
+    #[must_use]
+    pub fn royalty_of(&self, price: Money) -> Money {
+        let product = i128::from(price.minor()) * i128::from(self.royalty_bps);
+        Money::from_minor(i64::try_from(product / 10_000).unwrap_or(i64::MAX))
+    }
+
+    /// What is left for the seller: **the price minus the royalty**, not a second computation.
+    #[must_use]
+    pub fn remainder_of(&self, price: Money) -> Money {
+        Money::from_minor(price.minor() - self.royalty_of(price).minor())
+    }
+
+    /// The audit record for one restore is **not built here**, and the reason is placement.
+    ///
+    /// D-06's first criterion is that every restore has a PMB record, and the record type is
+    /// `SnapshotOperation` — which lives in `nau-plugin`, which `nau-market` does not depend on. The
+    /// kernel is not a data crate's dependency, so this module cannot name that type even to return
+    /// one.
+    ///
+    /// The record is therefore built where both are visible: the `com.twinsearth.sys.resource`
+    /// plugin, whose `restore` operation calls [`settle_restore`] and then files the operation under
+    /// the typed variant's canonical capability name.
+    ///
+    /// This is the placement rule v3.6.7 recorded for the snapshot store's consistency claim and
+    /// v3.8.1 met again for `Tier` and `PluginState`: **evidence belongs where the thing it is about
+    /// lives, and a dependency that exists for a signature's sake is the wrong shape.**
+    ///
+    /// What this module keeps is the part that is a market's: the address, the shares, and the
+    /// settlement.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "{} built by {}, sold by {}, {} bps to the author per restore",
+            self.snapshot, self.author, self.seller, self.royalty_bps
+        )
+    }
+}
+
+/// What one restore settled, and to whom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreSettlement {
+    /// The author's share.
+    pub royalty: Money,
+    /// The seller's share.
+    pub remainder: Money,
+    /// The total, which is what the buyer paid.
+    pub total: Money,
+    /// The ledger's discrepancy after both escrows were released.
+    ///
+    /// Returned rather than merely asserted inside the function, because D-06's third criterion is
+    /// that the settlement **conserves** — and a caller that has to be handed the number is one that
+    /// cannot forget to check it.
+    pub discrepancy: i64,
+}
+
+impl RestoreSettlement {
+    /// Whether the parts add up to the whole and the ledger is conserved.
+    #[must_use]
+    pub fn is_conserved(&self) -> bool {
+        self.discrepancy == 0 && self.royalty.minor() + self.remainder.minor() == self.total.minor()
+    }
+}
+
+/// Settle one restore of `asset`, paying the author and the seller from `buyer`.
+///
+/// # Two escrows rather than one, and that is the existing API's shape
+///
+/// [`Ledger::escrow`] opens an escrow with a payer and [`Ledger::release`] pays it to **one**
+/// payee. A royalty split has two payees, so it is two escrows — each from the same buyer, each
+/// released to its own payee. The alternative would be a ledger method that splits a payment, which
+/// is a new mechanism in the crate whose whole job is to have as few of those as possible.
+///
+/// # Conservation, checked rather than asserted
+///
+/// The escrows are funded from the buyer's balance, so nothing is created: what leaves the buyer
+/// arrives at the two payees, and the ledger's own `discrepancy` is **zero**. That number is
+/// returned rather than swallowed, and [`RestoreSettlement::is_conserved`] is what a caller checks.
+///
+/// # Errors
+///
+/// Whatever the ledger refuses — an underfunded buyer, a task with an open escrow, a zero amount —
+/// carried across unchanged rather than re-worded.
+pub fn settle_restore(
+    ledger: &mut Ledger,
+    asset: &SnapshotAsset,
+    restore_id: &str,
+    buyer: &AccountId,
+    price: Money,
+    at: u64,
+) -> Result<RestoreSettlement> {
+    if price <= Money::from_minor(0) {
+        return Err(NauError::Validation(
+            "a restore must be paid for; a zero price would settle nothing while looking settled"
+                .to_string(),
+        ));
+    }
+    let royalty = asset.royalty_of(price);
+    let remainder = asset.remainder_of(price);
+
+    // ---------------------------------------------------------------- the precondition
+    //
+    // Checked BEFORE either escrow is opened, and this is a fix rather than a precaution: the test
+    // `a_restore_that_cannot_be_paid_for_moves_nothing` found the two-escrow settlement taking the
+    // ROYALTY successfully and then failing on the remainder, leaving the author paid, the seller
+    // unpaid, and the ledger perfectly balanced. A ledger that balances is not the same as a
+    // settlement that completed.
+    //
+    // The check is the buyer covering the WHOLE price, because that is what the two escrows will
+    // draw between them. It is not the same as either escrow's own check and cannot be: each escrow
+    // asks whether the buyer can afford IT, and the question that matters is whether they can afford
+    // both.
+    //
+    // The alternative -- a ledger method that opens two escrows and releases both or neither -- is a
+    // new mechanism in the crate whose whole job is to have as few of those as possible. One
+    // precondition needs none.
+    if ledger.balance(buyer) < price {
+        // The variant carries the two numbers the ledger itself would report, so a caller reading
+        // this and a caller reading the ledger's own refusal see the same shape -- and
+        // `matches!(err, NauError::InsufficientBalance { .. })` catches both.
+        return Err(NauError::InsufficientBalance {
+            account: buyer.to_string(),
+            available: ledger.balance(buyer).minor(),
+            required: price.minor(),
+        });
+    }
+
+    // Two task ids derived from the restore, so the two escrows are distinguishable in the journal
+    // and a second restore of the same asset does not collide with the first.
+    //
+    // A hyphen rather than a colon, and that is not style: TaskId::parse allows only ASCII
+    // letters, digits, - and _, and it rejected `restore-1:royalty` with a message naming
+    // the rule. The compiler could not have caught it -- the id is built at run time -- which is
+    // what the test was for.
+    let royalty_task = TaskId::parse(&format!("{restore_id}-royalty"))?;
+    let remainder_task = TaskId::parse(&format!("{restore_id}-remainder"))?;
+    let author_account = AccountId::parse(&asset.author)?;
+    let seller_account = AccountId::parse(&asset.seller)?;
+
+    // The royalty first, and skipped entirely when it is zero: an escrow of nothing is refused by
+    // the ledger, and a zero-royalty asset is a legitimate thing for an author to publish.
+    if royalty > Money::from_minor(0) {
+        ledger.escrow(&royalty_task, buyer, royalty, at)?;
+        ledger.release(&royalty_task, &author_account, at)?;
+    }
+    // Then the seller's share. Also skipped when zero, which is the case for an author selling
+    // their own work at 100%.
+    if remainder > Money::from_minor(0) {
+        ledger.escrow(&remainder_task, buyer, remainder, at)?;
+        ledger.release(&remainder_task, &seller_account, at)?;
+    }
+
+    let report = ledger.audit();
+    Ok(RestoreSettlement {
+        royalty,
+        remainder,
+        total: price,
+        discrepancy: report.discrepancy,
+    })
 }
 
 /// A set of amounts, keyed by kind, that refuses to lose a kind's unit.
@@ -1598,6 +1837,242 @@ mod tests {
             format!("{err}").contains("positive completion time"),
             "got: {err}"
         );
+    }
+
+    // ------------------------------------------------------------ D-06
+
+    #[test]
+    fn a_royalty_split_adds_up_to_the_price_and_the_parts_are_exact() {
+        // D-06's third criterion's arithmetic half. The remainder is the price MINUS the royalty
+        // rather than a second computation, because two computations can disagree by a minor unit,
+        // and a settlement whose parts do not add up to its whole is one the ledger's conservation
+        // check would catch -- correctly, and late.
+        let asset = SnapshotAsset::new(
+            "sha256:abc",
+            "did:example:author",
+            "did:example:seller",
+            250,
+        )
+        .expect("asset");
+        for price_minor in [1i64, 3, 7, 999, 10_000, 1_000_000, 12_345_679] {
+            let price = Money::from_minor(price_minor);
+            let royalty = asset.royalty_of(price);
+            let remainder = asset.remainder_of(price);
+            assert_eq!(
+                royalty.minor() + remainder.minor(),
+                price.minor(),
+                "the parts must add up to the whole at {price_minor}"
+            );
+            // And the royalty is the truncated product rather than a rounded one.
+            let exact = i128::from(price_minor) * 250 / 10_000;
+            assert_eq!(i128::from(royalty.minor()), exact);
+        }
+    }
+
+    #[test]
+    fn a_royalty_larger_than_the_whole_is_refused() {
+        // A share above 100% would make the settlement pay out more than it took in, which is the
+        // money-creation this workspace's ledger refuses -- so it is refused here, earlier, with a
+        // message that says why.
+        let err = SnapshotAsset::new("sha256:a", "did:example:a", "did:example:s", 10_001)
+            .expect_err("must refuse");
+        assert!(format!("{err}").contains("creating money"), "got: {err}");
+        // Exactly 100% is allowed: an author selling their own work keeps all of it, and the
+        // seller's escrow is simply skipped.
+        let all =
+            SnapshotAsset::new("sha256:a", "did:a", "did:s", 10_000).expect("100% is a share");
+        let price = Money::from_minor(1_000);
+        assert_eq!(all.royalty_of(price), price);
+        assert_eq!(all.remainder_of(price), Money::from_minor(0));
+    }
+
+    #[test]
+    fn an_asset_must_name_its_address_its_author_and_its_seller() {
+        // Without an address there is nothing that says what a buyer gets, which is the whole of the
+        // second criterion.
+        assert!(SnapshotAsset::new("  ", "did:a", "did:s", 0).is_err());
+        assert!(SnapshotAsset::new("sha256:a", "", "did:s", 0).is_err());
+        assert!(SnapshotAsset::new("sha256:a", "did:a", "  ", 0).is_err());
+        let good = SnapshotAsset::new("sha256:a", "did:a", "did:s", 0).expect("asset");
+        assert!(good.describe().contains("sha256:a"));
+        assert!(good.describe().contains("0 bps"));
+    }
+
+    #[test]
+    fn settling_a_restore_conserves_the_ledger_and_moves_nothing_that_was_not_there() {
+        // D-06's third criterion, end to end. The escrows are funded from the buyer's balance, so
+        // nothing is created: what leaves the buyer arrives at the two payees, and the ledger's own
+        // discrepancy is zero.
+        let mut ledger = Ledger::new();
+        let buyer = AccountId::parse("did:example:buyer").expect("account");
+        let author = AccountId::parse("did:example:author").expect("account");
+        let seller = AccountId::parse("did:example:seller").expect("account");
+        ledger
+            .deposit(&buyer, Money::from_minor(1_000_000), "for the test", 1)
+            .expect("funded");
+
+        let before = ledger.audit();
+        let asset = SnapshotAsset::new(
+            "sha256:abc",
+            "did:example:author",
+            "did:example:seller",
+            2_500,
+        )
+        .expect("asset");
+        let settled = settle_restore(
+            &mut ledger,
+            &asset,
+            "restore-1",
+            &buyer,
+            Money::from_minor(100_000),
+            2,
+        )
+        .expect("settled");
+
+        assert!(settled.is_conserved(), "{settled:?}");
+        assert_eq!(
+            settled.royalty,
+            Money::from_minor(25_000),
+            "2500 bps of 100000"
+        );
+        assert_eq!(settled.remainder, Money::from_minor(75_000));
+        assert_eq!(settled.total, Money::from_minor(100_000));
+        assert_eq!(settled.discrepancy, 0, "the ledger must be conserved");
+
+        // The money MOVED rather than appearing: the buyer is down exactly the price, and the two
+        // payees are up exactly the two shares.
+        assert_eq!(ledger.balance(&buyer), Money::from_minor(900_000));
+        assert_eq!(ledger.balance(&author), Money::from_minor(25_000));
+        assert_eq!(ledger.balance(&seller), Money::from_minor(75_000));
+
+        // And the ledger's own view of what exists is unchanged, which is the property that
+        // separates a transfer from a mint.
+        //
+        // `before` was briefly an unused binding here -- clippy caught it -- and the right response
+        // was to restore the assertion rather than delete the variable, because this IS D-06's third
+        // criterion rather than a decoration on it.
+        //
+        // The two fields are the ones `ConservationReport` actually has. My first version asserted a
+        // `total_supply` that does not exist: the same invented-field-name defect C-08's criterion
+        // (2) exists to prevent, caught this time by the compiler rather than by a reviewer.
+        // Together they say what a transfer is: the sum of every balance is unchanged, AND what the
+        // balances are supposed to add up to is unchanged.
+        let after = ledger.audit();
+        assert_eq!(
+            before.sum_of_balances, after.sum_of_balances,
+            "a settlement moves money between accounts; it must not change the total"
+        );
+        assert_eq!(
+            before.accounted_total, after.accounted_total,
+            "and it must not change what the balances are supposed to add up to"
+        );
+        assert_eq!(after.discrepancy, 0);
+    }
+
+    #[test]
+    fn a_restore_that_cannot_be_paid_for_moves_nothing() {
+        // The failure has to be total: a settlement that took the royalty and then failed on the
+        // remainder would leave the buyer paid-up and the seller unpaid, in a ledger that still
+        // balances.
+        let mut ledger = Ledger::new();
+        let buyer = AccountId::parse("did:example:buyer").expect("account");
+        ledger
+            .deposit(&buyer, Money::from_minor(50_000), "for the test", 1)
+            .expect("funded");
+        let asset =
+            SnapshotAsset::new("sha256:a", "did:example:a", "did:example:s", 2_500).expect("asset");
+
+        assert!(settle_restore(
+            &mut ledger,
+            &asset,
+            "restore-poor",
+            &buyer,
+            Money::from_minor(100_000),
+            2,
+        )
+        .is_err());
+        assert_eq!(
+            ledger.balance(&buyer),
+            Money::from_minor(50_000),
+            "nothing moved"
+        );
+        assert_eq!(ledger.audit().discrepancy, 0);
+
+        // A zero price would settle nothing while looking settled.
+        assert!(settle_restore(
+            &mut ledger,
+            &asset,
+            "restore-free",
+            &buyer,
+            Money::from_minor(0),
+            2
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn two_restores_of_one_asset_do_not_collide() {
+        // The escrow task ids are derived from the restore, so a second restore is a second pair of
+        // escrows rather than a conflict with the first -- which is what the ledger reports for a
+        // task that already has an open escrow.
+        let mut ledger = Ledger::new();
+        let buyer = AccountId::parse("did:example:buyer").expect("account");
+        ledger
+            .deposit(&buyer, Money::from_minor(1_000_000), "for the test", 1)
+            .expect("funded");
+        let asset = SnapshotAsset::new(
+            "sha256:a",
+            "did:example:author",
+            "did:example:seller",
+            1_000,
+        )
+        .expect("asset");
+
+        for restore in ["restore-a", "restore-b", "restore-c"] {
+            settle_restore(
+                &mut ledger,
+                &asset,
+                restore,
+                &buyer,
+                Money::from_minor(10_000),
+                2,
+            )
+            .expect("settled");
+        }
+        assert_eq!(ledger.audit().discrepancy, 0);
+        assert_eq!(ledger.balance(&buyer), Money::from_minor(970_000));
+        let author = AccountId::parse("did:example:author").expect("account");
+        assert_eq!(ledger.balance(&author), Money::from_minor(3_000));
+        let seller = AccountId::parse("did:example:seller").expect("account");
+        assert_eq!(ledger.balance(&seller), Money::from_minor(27_000));
+    }
+
+    #[test]
+    fn a_zero_royalty_pays_the_seller_everything() {
+        // An author may publish with no royalty, and the settlement must SKIP an escrow of nothing
+        // rather than open one -- the ledger refuses a zero escrow, so a settlement that opened one
+        // would fail on a perfectly legitimate asset.
+        let mut ledger = Ledger::new();
+        let buyer = AccountId::parse("did:example:buyer").expect("account");
+        ledger
+            .deposit(&buyer, Money::from_minor(100_000), "for the test", 1)
+            .expect("funded");
+        let asset = SnapshotAsset::new("sha256:a", "did:example:author", "did:example:seller", 0)
+            .expect("asset");
+        let settled = settle_restore(
+            &mut ledger,
+            &asset,
+            "restore-free-royalty",
+            &buyer,
+            Money::from_minor(10_000),
+            2,
+        )
+        .expect("settled");
+        assert_eq!(settled.royalty, Money::from_minor(0));
+        assert_eq!(settled.remainder, Money::from_minor(10_000));
+        assert!(settled.is_conserved());
+        let seller = AccountId::parse("did:example:seller").expect("account");
+        assert_eq!(ledger.balance(&seller), Money::from_minor(10_000));
     }
 
     #[test]

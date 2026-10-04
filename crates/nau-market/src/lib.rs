@@ -95,9 +95,9 @@ pub use persistence::{
 pub use pricing::{Adjustment, Price, PricingInput};
 pub use reputation::Reputation;
 pub use resource::{
-    match_demand, LatencyClass, MeteredAmount, RankedOffer, ResourceAmount, ResourceBundle,
-    ResourceDemand, ResourceKind, ResourceMatch, ResourceOffer, ResourceRegistration,
-    ResourceRegistry,
+    match_demand, settle_restore, LatencyClass, MeteredAmount, RankedOffer, ResourceAmount,
+    ResourceBundle, ResourceDemand, ResourceKind, ResourceMatch, ResourceOffer,
+    ResourceRegistration, ResourceRegistry, RestoreSettlement, SnapshotAsset,
 };
 pub use service::{Market, MarketConfig, MarketStats};
 

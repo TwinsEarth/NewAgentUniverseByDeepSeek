@@ -26,7 +26,7 @@
 
 use nau_market::{
     MarketConfig, Price, PricingInput, ResourceDemand, ResourceKind, ResourceOffer,
-    ResourceRegistration, ResourceRegistry,
+    ResourceRegistration, ResourceRegistry, SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -51,8 +51,9 @@ pub const OPERATIONS: &[&str] = &[
     // D-04: the matcher, reachable. An eligibility filter nothing calls is a rule nobody can be
     // refused by.
     "match",
-    // D-05: the pricing terms, reachable for the same reason.
-    "price",
+    // D-06: the snapshot asset and the restore that pays its author.
+    "asset",
+    "restore",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -110,13 +111,20 @@ impl ResourcePlugin {
 
     /// The capabilities the plugin declares.
     ///
-    /// The basic set and nothing above it. A body that announced resources and could also act on
-    /// the plugins offering them would be one whose announcements carried authority they do not
-    /// have.
+    /// The basic set, plus `SandboxRestore` as of D-06. A body that announced resources and could
+    /// also act on the plugins offering them would be one whose announcements carried authority
+    /// they do not have -- but restoring a snapshot IS exercising `SandboxRestore`, so a body that
+    /// settles restores and did not hold it would be settling an operation it has no authority to
+    /// perform.
+    ///
+    /// The name is the one `SnapshotOperation::Restore.capability()` returns rather than a string
+    /// chosen here: D-06's first criterion is that the record carries the **canonical** name, and
+    /// there is one place it is decided.
     pub const CAPABILITIES: &'static [Capability] = &[
         Capability::LifecycleRead,
         Capability::MessageSend,
         Capability::StorageOwn,
+        Capability::SandboxRestore,
     ];
 
     /// Build the plugin.
@@ -428,6 +436,58 @@ impl SystemPlugin for ResourcePlugin {
                     }),
                 ))
             }
+            "asset" => {
+                let asset: SnapshotAsset =
+                    serde_json::from_value(payload::field(&msg.payload, "asset")?.clone())
+                        .map_err(|e| {
+                            payload::protocol(
+                                "malformed_asset",
+                                format!(
+                                    "a snapshot asset needs a content address, an author, a seller \
+                                     and a royalty: {e}"
+                                ),
+                            )
+                        })?;
+                // Rebuilt through the constructor rather than trusted as deserialised, so the
+                // royalty bound is applied to an asset that arrived over the wire exactly as it is
+                // to one built in code -- the same lesson the D-03 check taught about
+                // `ResourceAmount`.
+                let checked = SnapshotAsset::new(
+                    &asset.snapshot,
+                    &asset.author,
+                    &asset.seller,
+                    asset.royalty_bps,
+                )
+                .map_err(|e| payload::protocol("invalid_asset", e))?;
+                // D-06's first criterion, as far as this layer can take it WITHOUT claiming more:
+                // the record is built from the TYPED variant, so the capability name is the
+                // canonical one, and it is returned. It is not filed onto the bus from here,
+                // because `SystemPlugin::handle` receives no `&mut HostContext` and so has no way to
+                // call `request_send`. Said plainly rather than left for a reader to discover.
+                let record = nau_plugin::snapshot_audit::SnapshotOperation::Restore {
+                    sandbox: String::new(),
+                    snapshot: checked.snapshot.clone(),
+                };
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "asset": checked.describe(),
+                        "snapshot": checked.snapshot,
+                        "royalty_bps": checked.royalty_bps,
+                        "restore_capability": record.capability().as_str(),
+                        "restore_capability_source": "the typed variant's own answer, not a string \
+                                                     chosen here",
+                        "record_filed": false,
+                        "why_not_filed": "`SystemPlugin::handle` receives no `&mut HostContext`, so \
+                                          this body cannot call `request_send`. The record and its \
+                                          canonical capability are produced and returned; FILING \
+                                          them needs a signature change in the kernel, and saying \
+                                          \"filed\" when the record is produced would be the \
+                                          written-but-not-wired shape this project keeps finding.",
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }
@@ -455,11 +515,38 @@ mod tests {
     }
 
     #[test]
-    fn it_holds_the_basic_set_and_nothing_above_it() {
-        // Announcing resources is not authority over them.
-        assert_eq!(ResourcePlugin::CAPABILITIES.len(), Capability::BASIC.len());
+    fn it_holds_the_basic_set_plus_the_one_operation_it_actually_performs() {
+        // This test used to be named `..._and_nothing_above_it` and to assert the capability count
+        // equalled the basic set. D-06 made that claim false, and the honest response is to change
+        // the claim rather than the count: settling a restore exercises `SandboxRestore`, so a body
+        // that settles restores and did not hold it would be settling an operation it has no
+        // authority to perform.
+        //
+        // What remains true, and is what the test now checks: exactly ONE capability above the basic
+        // set, it is the one a restore needs, and the body still holds no kernel authority.
+        let above: Vec<&Capability> = ResourcePlugin::CAPABILITIES
+            .iter()
+            .filter(|c| !Capability::BASIC.contains(c))
+            .collect();
+        assert_eq!(
+            above.len(),
+            1,
+            "exactly one capability above the basic set, got {above:?}"
+        );
+        assert_eq!(*above[0], Capability::SandboxRestore);
+        // And the canonical name is the typed variant's own answer, so this list and the audit
+        // record cannot disagree about what a restore is called.
+        let record = nau_plugin::snapshot_audit::SnapshotOperation::Restore {
+            sandbox: "sbx".to_string(),
+            snapshot: "sha256:abc".to_string(),
+        };
+        assert_eq!(record.capability(), Capability::SandboxRestore);
+
         for cap in ResourcePlugin::CAPABILITIES {
-            assert!(!cap.is_kernel(), "this body announces, it does not decide");
+            assert!(
+                !cap.is_kernel(),
+                "this body announces and settles; it does not decide"
+            );
         }
         assert!(!ResourcePlugin::CAPABILITIES.contains(&Capability::ChainEvmWrite));
     }

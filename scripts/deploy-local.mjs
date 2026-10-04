@@ -1067,6 +1067,74 @@ async function main() {
     return `4 terms each with a reason, the total re-derived here, and a zero base refused`;
   });
 
+  // D-06's first criterion, and its LIMIT stated as a check rather than left in a document.
+  //
+  // The record is built from the typed variant, so its capability name is the canonical one. What
+  // this check asserts is exactly what is true: the record and its capability are PRODUCED, and the
+  // body reports that it cannot FILE them, because `SystemPlugin::handle` receives no
+  // `&mut HostContext` and so has no way to call `request_send`. Asserting "filed" when the record
+  // is produced would be the written-but-not-wired shape this project keeps finding.
+  await check('a snapshot asset names the canonical restore capability, and says it cannot file it', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const good = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'asset',
+      asset: {
+        snapshot: 'sha256:deploy-check-snapshot',
+        author: 'did:example:author',
+        seller: 'did:example:seller',
+        royalty_bps: 250,
+      },
+    });
+    assert(
+      good.status >= 200 && good.status < 300,
+      `asset -> HTTP ${good.status}: ${good.text.slice(0, 220)}`,
+    );
+    // The canonical name, taken from the typed variant rather than chosen at the call site.
+    assert(
+      good.json.restore_capability === 'sandbox:restore',
+      `the restore capability must be the canonical one, got ${JSON.stringify(good.json.restore_capability)}`,
+    );
+    // And the honest limit, asserted so that a change which DID start filing would fail this check
+    // and force someone to update it rather than leaving a stale disclaimer behind.
+    assert(
+      good.json.record_filed === false,
+      'the body cannot file from `handle`, and the answer must say so',
+    );
+    assert(
+      String(good.json.why_not_filed).includes('request_send'),
+      `the reason must name the missing call: ${good.json.why_not_filed}`,
+    );
+
+    // A royalty above the whole price would pay out more than it took in.
+    const greedy = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'asset',
+      asset: {
+        snapshot: 'sha256:x',
+        author: 'did:example:a',
+        seller: 'did:example:s',
+        royalty_bps: 10_001,
+      },
+    });
+    assert(
+      greedy.status === 400,
+      `a royalty above 100% must be refused: HTTP ${greedy.status}: ${greedy.text.slice(0, 160)}`,
+    );
+
+    // An asset with no address has nothing that says what a buyer gets.
+    const nowhere = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'asset',
+      asset: { snapshot: '', author: 'did:example:a', seller: 'did:example:s', royalty_bps: 0 },
+    });
+    assert(nowhere.status === 400, `an asset with no address must be refused, got ${nowhere.status}`);
+
+    return `canonical sandbox:restore, and record_filed:false reported rather than glossed`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

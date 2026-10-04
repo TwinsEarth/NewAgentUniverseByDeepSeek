@@ -148,7 +148,7 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
     // time a plugin legitimately needed network or chain access. The map cannot be satisfied
     // by accident: a plugin that gains a capability without appearing here fails, and one
     // that appears here with the wrong capability fails too.
-    const NON_BASIC: [(&str, &[&str]); 10] = [
+    const NON_BASIC: [(&str, &[&str]); 11] = [
         // Outbound network access, which is the point of the capability model: driving an
         // HTTP client is a thing a plugin must say it does.
         ("com.twinsearth.sys.http", &["net:gossip:publish"]),
@@ -210,6 +210,16 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
             // sentences without the police is a court with an army.
             "com.twinsearth.sys.security.tribunal",
             &["kernel:policy:write"],
+        ),
+        (
+            // D-06. One capability above the basic set, and it is the operation the body actually
+            // performs: settling a restore IS exercising `sandbox:restore`, so a body that settles
+            // restores and did not hold it would be settling something it has no authority to do.
+            //
+            // Not a kernel capability, and checked as such: the resource market restores sandboxes,
+            // it does not decide who may.
+            "com.twinsearth.sys.resource",
+            &["sandbox:restore"],
         ),
     ];
 
