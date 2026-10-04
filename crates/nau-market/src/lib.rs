@@ -81,6 +81,7 @@
 pub mod actor;
 pub mod cold_start;
 pub mod matching;
+pub mod metrics;
 pub mod persistence;
 pub mod pricing;
 pub mod reputation;
@@ -92,6 +93,7 @@ pub mod service;
 pub use actor::{Actor, Authority};
 pub use cold_start::{ColdStartAssessment, ColdStartPolicy};
 pub use matching::{rank_bids, score_value, MatchOutcome};
+pub use metrics::{KindMetrics, MarketMetrics};
 pub use persistence::{
     MarketSnapshot, RestoreDefect, RestoreReport, MARKET_PROTOCOL_KEY, MARKET_STATE_KEY,
     MARKET_STATE_SCHEMA, MARKET_VERSION_KEY,

@@ -185,7 +185,7 @@ nau --data-dir <prefix>\data inspect      # argv[1] 成了选项 → 报 unknown
   可查的表。
 * **修复**：本文 §4 给出实测路由表；部署脚本改为正确路径，并新增
   「畸形金额 → 422」的断言。
-* **验证**：49 项部署检查全绿（数目由 `scripts/verify-all.mjs` 的 `doc-counts` 关卡比对）。
+* **验证**：50 项部署检查全绿（数目由 `scripts/verify-all.mjs` 的 `doc-counts` 关卡比对）。
 
 ### 问题 5（环境类）：并行 cargo 构建把内存耗尽，且会**静默**失败
 

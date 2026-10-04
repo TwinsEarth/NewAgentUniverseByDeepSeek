@@ -1612,6 +1612,101 @@ async function main() {
     return `starter cap for the unseen, widening with observations, and no graduation by frequency`;
   });
 
+  // D-11's first criterion: every figure is DERIVED from the state it is about rather than
+  // accumulated, so two calls agree and a node re-deriving from the same journals gets the same
+  // answer. This check calls it twice and compares.
+  await check('the market report is derived from state, and there is no total across kinds', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const first = await resource({ capability: 'plugin:lifecycle:read', op: 'metrics' });
+    assert(
+      first.status >= 200 && first.status < 300,
+      `metrics -> HTTP ${first.status}: ${first.text.slice(0, 220)}`,
+    );
+    // Called twice on the same state, field for field.
+    for (let i = 0; i < 3; i += 1) {
+      const again = await resource({ capability: 'plugin:lifecycle:read', op: 'metrics' });
+      assert(
+        JSON.stringify(again.json) === JSON.stringify(first.json),
+        `run ${i}: derived figures must be reproducible`,
+      );
+    }
+
+    // Per kind, each naming its own unit -- so two rows cannot be added up by accident.
+    assert(Array.isArray(first.json.by_kind) && first.json.by_kind.length > 0, 'at least one book');
+    for (const row of first.json.by_kind) {
+      assert(
+        typeof row.unit === 'string' && row.unit.length > 0,
+        `a row with no unit: ${JSON.stringify(row)}`,
+      );
+      assert(
+        row.utilisation_bps >= 0 && row.utilisation_bps <= 10_000,
+        `a ratio out of range: ${JSON.stringify(row)}`,
+      );
+      // The conservation identity, re-derived here rather than trusted.
+      assert(
+        row.held === row.issued - row.consumed,
+        `${row.kind}: held ${row.held} must be issued ${row.issued} less consumed ${row.consumed}`,
+      );
+    }
+
+    // Coverage can never exceed the whole, whatever has been observed.
+    assert(
+      first.json.observation_coverage_bps >= 0 && first.json.observation_coverage_bps <= 10_000,
+      `coverage out of range: ${first.json.observation_coverage_bps}`,
+    );
+    assert(
+      first.json.providers_observed <= first.json.providers,
+      `observed ${first.json.providers_observed} cannot exceed registered ${first.json.providers}`,
+    );
+
+    // The absence, stated by the report itself.
+    assert(
+      String(first.json.no_total_across_kinds).includes('do not add up'),
+      `the report must say why there is no total: ${first.json.no_total_across_kinds}`,
+    );
+    assert(
+      String(first.json.reproducible).includes('DERIVED'),
+      `and that the figures are derived: ${first.json.reproducible}`,
+    );
+    const lines = first.json.explain;
+    assert(
+      Array.isArray(lines) && lines.length >= 3,
+      `an explanation per kind and then some: ${JSON.stringify(lines)}`,
+    );
+    assert(
+      lines[lines.length - 1].includes('no total across kinds'),
+      `the last line must be the absence: ${lines[lines.length - 1]}`,
+    );
+
+    // A figure CHANGES when the state does, so it is a measurement and not a constant.
+    //
+    // The capability is `storage:own`, because `issue` WRITES. This check's first version used the
+    // read capability, the plugin refused it, and the failure surfaced three assertions later as
+    // "issuing must move the figure: 150 -> 150" -- so the write's success is now asserted HERE,
+    // where a capability mistake fails rather than somewhere downstream of it.
+    const before = first.json.by_kind.find((r) => r.kind === 'cpu');
+    const issued = await resource({
+      capability: 'plugin:storage:own',
+      op: 'issue',
+      holder: 'did:nau:metricscheckcheck',
+      amount: { kind: 'cpu', quantity: 7 },
+    });
+    assert(
+      issued.status >= 200 && issued.status < 300,
+      `issuing is a write and needs the write capability: HTTP ${issued.status}: ${issued.text.slice(0, 180)}`,
+    );
+    const after = (await resource({ capability: 'plugin:lifecycle:read', op: 'metrics' })).json;
+    const afterCpu = after.by_kind.find((r) => r.kind === 'cpu');
+    assert(
+      afterCpu.issued === before.issued + 7,
+      `issuing must move the figure: ${before.issued} -> ${afterCpu.issued}`,
+    );
+
+    return `${first.json.by_kind.length} per-kind books, reproducible, and no total across kinds`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

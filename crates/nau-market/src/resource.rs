@@ -1001,6 +1001,17 @@ impl ResourceRegistry {
         self.entries.is_empty()
     }
 
+    /// Every registered provider's name, in name order.
+    ///
+    /// Added at D-11, because the metrics need the registered **set** and not a filtered view of it:
+    /// `available(kind)` answers "who offers this kind", and coverage is a question about everybody
+    /// who is registered. Deriving it from a per-kind query would have counted each provider once per
+    /// kind it offers and reported coverage above 100%.
+    #[must_use]
+    pub fn available_names(&self) -> Vec<&String> {
+        self.entries.keys().collect()
+    }
+
     /// Whether `provider` is registered.
     #[must_use]
     pub fn contains(&self, provider: &str) -> bool {

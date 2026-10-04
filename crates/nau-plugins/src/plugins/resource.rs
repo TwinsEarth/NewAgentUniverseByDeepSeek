@@ -25,9 +25,10 @@
 //! other four releases are expressed in.
 
 use nau_market::{
-    ColdStartPolicy, MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand,
-    ResourceKind, ResourceLedger, ResourceObservation, ResourceOffer, ResourceRegistration,
-    ResourceRegistry, SamplingFinding, SamplingPlan, SamplingVerdict, SnapshotAsset,
+    ColdStartPolicy, MarketConfig, MarketMetrics, Price, PricingInput, ResourceAmount,
+    ResourceDemand, ResourceKind, ResourceLedger, ResourceObservation, ResourceOffer,
+    ResourceRegistration, ResourceRegistry, SamplingFinding, SamplingPlan, SamplingVerdict,
+    SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -68,6 +69,8 @@ pub const OPERATIONS: &[&str] = &[
     "observe",
     // D-10: cold start. A probation nothing consults is a probation nobody is on.
     "cold-start",
+    // D-11: the report. Metrics nothing can read are metrics nobody has.
+    "metrics",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -764,6 +767,53 @@ impl SystemPlugin for ResourcePlugin {
                         "reproducible": "a pure function of the policy and the measured reputation: \
                                          no clock, no draw, no accumulated state, so two nodes \
                                          holding the same observations reach the same conclusion",
+                    }),
+                ))
+            }
+            "metrics" => {
+                // The providers are the registry's and the observed set is this body's own
+                // measurement map. Both come from state rather than from the caller, so the figures
+                // cannot be inflated by asking nicely.
+                let providers: Vec<String> = self
+                    .registry
+                    .available_names()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let observed: Vec<String> = self.observations.keys().cloned().collect();
+                let metrics = MarketMetrics::of(&self.resources, &providers, &observed);
+                let by_kind: Vec<Value> = metrics
+                    .by_kind
+                    .iter()
+                    .map(|(kind, m)| {
+                        json!({
+                            "kind": kind.label(),
+                            "unit": kind.unit(),
+                            "issued": m.issued,
+                            "consumed": m.consumed,
+                            "held": m.held,
+                            // A RATIO, and the only kind of figure here comparable across kinds:
+                            // the units differ, so the totals do not.
+                            "utilisation_bps": m.utilisation_bps,
+                        })
+                    })
+                    .collect();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "by_kind": by_kind,
+                        "providers": metrics.providers,
+                        "providers_observed": metrics.providers_observed,
+                        "observation_coverage_bps": metrics.observation_coverage_bps(),
+                        "explain": metrics.explain(),
+                        "reproducible": "every figure is DERIVED from the books and the registry \
+                                         rather than accumulated, so two calls on the same state \
+                                         agree and a node re-deriving from the same journals gets \
+                                         the same answer",
+                        "no_total_across_kinds": "six units do not add up; utilisation and coverage \
+                                                  are ratios and are the only figures here that are \
+                                                  comparable",
                     }),
                 ))
             }
