@@ -1,4 +1,4 @@
-# NewAgentUniverseByDeepSeek · V3.9.0
+# NewAgentUniverseByDeepSeek · V3.9.1
 
 > **基于对 `TwinsEarth/agent-universe` 全量源码审计的全新架构重写；V2.2.2 起为「一切插件化」架构，V3.2.1 起可在线演进。**
 > A clean-room rewrite of the agent-universe design, produced from a line-by-line audit
@@ -305,7 +305,7 @@ tarball 直链：`https://registry.npmjs.org/@twinsearth/nau-dsh-plugin/-/nau-ds
 node scripts/verify-all.mjs
 ```
 
-**23 道关卡** + **51 项部署检查**。缺少外部工具时该关卡标为 **SKIP 并列入 NOT VERIFIED**——
+**23 道关卡** + **52 项部署检查**。缺少外部工具时该关卡标为 **SKIP 并列入 NOT VERIFIED**——
 不静默通过，也不假装通过；需要全部通过时加 `--allow-missing-tools` 会反过来失败。
 
 ---

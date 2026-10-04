@@ -43,7 +43,14 @@ use crate::host::{HostContext, LogLevel, PluginGrant, SystemPlugin};
 use crate::payload;
 
 /// The operations this plugin implements.
-pub const OPERATIONS: &[&str] = &["capabilities", "rails", "route", "nouns"];
+pub const OPERATIONS: &[&str] = &[
+    "capabilities",
+    "rails",
+    "route",
+    "nouns",
+    // E-03: the Bitcoin vocabulary, and the platform question.
+    "bitcoin",
+];
 
 /// How a rail is provided, or why it is not.
 ///
@@ -239,7 +246,135 @@ impl SettlementRail {
     }
 }
 
+/// The Bitcoin capabilities the design names, and which of them exist here.
+///
+/// # E-03's first criterion, and the correction it needed
+///
+/// The plan says `Lightning`, `Taproot` and `RGB` have **zero hits** in this repository and that this
+/// is why they must not be claimed. **That was true when the plan was written and is not true now**:
+/// v3.8.0's `REFUSED` table and v3.9.0's `SETTLEMENT_NOUNS` both name them, so a search finds them.
+///
+/// **The conclusion survives; the premise does not**, and this is worth stating precisely rather than
+/// quoting a stale figure. What the hits are is **refusals** — the right kind of appearance and not
+/// support — so "must not claim support" is still exactly right, for the reason that every appearance
+/// is inside a refusal or inside an audit of refusals.
+///
+/// # Why these names are not `Capability` variants
+///
+/// `Capability` is the list of what a body **may hold**, and `nau-plugin`'s `Capability::as_str` is
+/// the wire form of that list. Adding `bitcoin:utxo:read` to it would say a body might hold it, and
+/// **no body can**: nothing in this workspace reads a UTXO set or signs a Bitcoin transaction.
+///
+/// So the names live here, as a vocabulary this plugin can **answer about**, and every one of them
+/// refuses. That is the difference between a name a caller can ask about and a capability a plugin
+/// could be granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BitcoinCapability {
+    /// Read the unspent-output set.
+    UtxoRead,
+    /// Sign a Bitcoin transaction.
+    TxSign,
+    /// Run a Bitcoin node.
+    ///
+    /// The one of the three that is a **platform** question rather than an implementation question,
+    /// which is why E-03 splits it out: a node is a process, and the answer depends on where the node
+    /// is running.
+    NodeRun,
+}
+
+impl BitcoinCapability {
+    /// Every one, in order.
+    pub const ALL: [BitcoinCapability; 3] = [
+        BitcoinCapability::UtxoRead,
+        BitcoinCapability::TxSign,
+        BitcoinCapability::NodeRun,
+    ];
+
+    /// The capability's name, spelled as the design spells it.
+    ///
+    /// The same `chain:evm:read` shape the existing capabilities use, so that a reader meeting both
+    /// does not have to work out whether the colons mean the same thing. They do.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            BitcoinCapability::UtxoRead => "bitcoin:utxo:read",
+            BitcoinCapability::TxSign => "bitcoin:tx:sign",
+            BitcoinCapability::NodeRun => "bitcoin:node:run",
+        }
+    }
+
+    /// Whether this capability is provided here, and why not when it is not.
+    ///
+    /// # E-03's second and third criteria
+    ///
+    /// The second: a declared capability that is not implemented **refuses when called**, and the
+    /// refusal names what is missing. The first two names never reach `Available`, on any platform.
+    ///
+    /// The third: the node-running capability is a **platform** question. It is available on Linux
+    /// and refused elsewhere — **refused, not degraded**: E-03's platform column says "Linux (node
+    /// running only)", and a node that ran a Bitcoin process on a platform it was not built for would
+    /// be one whose behaviour nobody had tested.
+    #[must_use]
+    pub fn support(self) -> RailSupport {
+        match self {
+            BitcoinCapability::UtxoRead => RailSupport::Refused {
+                reason: "this workspace has no Bitcoin node, no UTXO set and no indexer; nothing \
+                         here can answer what outputs exist, so the capability is declared and \
+                         refuses on every platform",
+            },
+            BitcoinCapability::TxSign => RailSupport::Refused {
+                reason: "nothing here holds a Bitcoin key or produces a Bitcoin signature, and \
+                         E-06's criterion keeps private keys out of sandboxes -- so there is no \
+                         signer to hold this capability, on any platform",
+            },
+            BitcoinCapability::NodeRun => {
+                if cfg!(target_os = "linux") {
+                    RailSupport::Refused {
+                        reason: "the platform allows it, and this build still has no Bitcoin node \
+                                 binary or configuration to run: E-03 delivers the vocabulary and \
+                                 the refusal, not the node",
+                    }
+                } else {
+                    RailSupport::Refused {
+                        reason: "running a Bitcoin node is Linux-only in this build, and this is not \
+                                 Linux -- refused rather than degraded, because a node started on a \
+                                 platform it was not built for is one whose behaviour nobody tested",
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether it is available.
+    #[must_use]
+    pub fn is_available(self) -> bool {
+        matches!(self.support(), RailSupport::Available { .. })
+    }
+
+    /// The reason it is not.
+    #[must_use]
+    pub fn refusal(self) -> &'static str {
+        match self.support() {
+            RailSupport::Available { .. } => "",
+            RailSupport::Refused { reason } => reason,
+        }
+    }
+
+    /// Whether this capability's answer depends on the platform.
+    ///
+    /// Exposed so a caller can tell "we have not built it" from "this platform cannot", which are
+    /// different answers to the same question and support different responses.
+    #[must_use]
+    pub fn is_platform_dependent(self) -> bool {
+        matches!(self, BitcoinCapability::NodeRun)
+    }
+}
+
 /// What a route decision was based on.
+///
+/// Restored, because inserting `BitcoinCapability` above it separated this struct from its doc
+/// comment and clippy's `missing_docs` caught the orphan. The house rule is that every public item
+/// carries a doc comment, and this one had one -- it was simply no longer attached to anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RouteRequest {
     /// The amount, in minor units.
@@ -548,6 +683,44 @@ impl SystemPlugin for SettlementPlugin {
                     }),
                 ))
             }
+            "bitcoin" => {
+                // E-03's second criterion, structurally: every one of these refuses, and the
+                // refusal is the SAME function the vocabulary answers with. There is no path here
+                // that reports a Bitcoin capability as available, because none of them is.
+                let capabilities: Vec<Value> = BitcoinCapability::ALL
+                    .into_iter()
+                    .map(|cap| {
+                        json!({
+                            "capability": cap.name(),
+                            "available": cap.is_available(),
+                            "refused_because": cap.refusal(),
+                            "platform_dependent": cap.is_platform_dependent(),
+                        })
+                    })
+                    .collect();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "capabilities": capabilities,
+                        "any_available": BitcoinCapability::ALL
+                            .iter()
+                            .any(|c| c.is_available()),
+                        "target_os": std::env::consts::OS,
+                        "not_capability_variants": "these names are NOT `Capability` variants: that \
+                                                    list is what a body may HOLD, and adding one \
+                                                    would say a body might hold it when nothing in \
+                                                    this workspace can read a UTXO set or sign a \
+                                                    Bitcoin transaction",
+                        "the_plan_premise_changed": "E-03 says Lightning/Taproot/RGB have zero hits \
+                                                     here; v3.8.0 and v3.9.0 named all three in \
+                                                     refusals, so a search finds them. The \
+                                                     CONCLUSION survives -- none may be claimed as \
+                                                     supported -- and every appearance is inside a \
+                                                     refusal or an audit of refusals.",
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }
@@ -823,6 +996,101 @@ mod tests {
         assert_eq!(route(&request).explain(), first.explain());
     }
 
+    // ---------------------------------------------------------------- E-03
+
+    #[test]
+    fn every_bitcoin_capability_refuses_and_the_names_are_the_designs() {
+        // E-03's second criterion, structurally: there is no path that reports one available.
+        assert_eq!(BitcoinCapability::ALL.len(), 3);
+        for cap in BitcoinCapability::ALL {
+            assert!(
+                !cap.is_available(),
+                "{:?} must not be available: this workspace has no Bitcoin node, no UTXO set and no \
+                 signer",
+                cap
+            );
+            assert!(
+                cap.refusal().len() > 30,
+                "{:?} refuses with a reason too short to act on: {}",
+                cap,
+                cap.refusal()
+            );
+            assert!(
+                cap.name().starts_with("bitcoin:"),
+                "the name must use the same colon shape as chain:evm:read: {}",
+                cap.name()
+            );
+        }
+        // The names exactly as the plan spells them.
+        assert_eq!(BitcoinCapability::UtxoRead.name(), "bitcoin:utxo:read");
+        assert_eq!(BitcoinCapability::TxSign.name(), "bitcoin:tx:sign");
+    }
+
+    #[test]
+    fn the_node_running_answer_is_the_platforms_and_says_which_question_it_answered() {
+        // E-03's third criterion: the platform question, and the answer is checkable on EVERY
+        // platform rather than only where it is interesting.
+        assert!(BitcoinCapability::NodeRun.is_platform_dependent());
+        assert!(!BitcoinCapability::UtxoRead.is_platform_dependent());
+        assert!(!BitcoinCapability::TxSign.is_platform_dependent());
+
+        // It refuses everywhere this build runs, and the REASON differs by platform: on Linux it is
+        // "the platform allows it and we have not built it", elsewhere it is "this platform cannot".
+        // Asserting only that it refuses would lose the distinction that makes the answer useful.
+        let reason = BitcoinCapability::NodeRun.refusal();
+        if cfg!(target_os = "linux") {
+            assert!(
+                reason.contains("no Bitcoin node binary"),
+                "on Linux the reason is what is missing from the BUILD: {reason}"
+            );
+        } else {
+            assert!(
+                reason.contains("not Linux"),
+                "elsewhere the reason is the PLATFORM: {reason}"
+            );
+            assert!(
+                reason.contains("refused rather than degraded"),
+                "and it must say it is a refusal rather than a downgrade: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_three_nouns_are_not_claimed_as_supported_and_the_premise_is_recorded() {
+        // E-03's first criterion. The plan's premise -- that Lightning/Taproot/RGB have zero hits --
+        // is no longer true, because v3.8.0 and v3.9.0 named all three in refusals. The CONCLUSION
+        // is unchanged and is what this asserts: none of them may be claimed as supported.
+        for rail in [
+            SettlementRail::Lightning,
+            SettlementRail::Taproot,
+            SettlementRail::Rgb,
+        ] {
+            assert!(
+                !rail.is_available(),
+                "{} must not be available",
+                rail.label()
+            );
+            assert!(
+                rail.refusal().unwrap_or("").len() > 30,
+                "{} must refuse with a reason, and `SettlementRail::refusal` returns an Option \
+                 because an available rail has none -- which is the shape that keeps the two \
+                 answers distinguishable",
+                rail.label()
+            );
+        }
+        // And the whole available set, so a future release that flipped one fails here.
+        let available: Vec<&str> = SettlementRail::ALL
+            .iter()
+            .filter(|r| r.is_available())
+            .map(|r| r.label())
+            .collect();
+        assert!(
+            !available.contains(&"lightning")
+                && !available.contains(&"taproot")
+                && !available.contains(&"rgb"),
+            "got {available:?}"
+        );
+    }
     #[test]
     fn it_holds_no_capability_that_could_move_value() {
         // The claim the plugin's own answer makes, asserted where the capabilities are.

@@ -1827,6 +1827,95 @@ async function main() {
     return `${rails.json.available} of ${rails.json.total} rails available, 11 refusals by name, and no invented counts`;
   });
 
+  // E-03's three criteria. The third is the platform question, and it is checkable on EVERY platform
+  // -- which is the point: a Linux-only mechanism that refuses elsewhere is verified everywhere,
+  // while one that degrades silently is verified nowhere.
+  await check('no Bitcoin capability is available, and the node answer is the platform\'s', async () => {
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    const bitcoin = await settlement({ capability: 'plugin:lifecycle:read', op: 'bitcoin' });
+    assert(
+      bitcoin.status >= 200 && bitcoin.status < 300,
+      `bitcoin -> HTTP ${bitcoin.status}: ${bitcoin.text.slice(0, 220)}`,
+    );
+    assert(
+      bitcoin.json.capabilities.length === 3,
+      `three capabilities, got ${bitcoin.json.capabilities.length}`,
+    );
+    // E-03's second criterion, structurally: none is available, on any platform.
+    assert(
+      bitcoin.json.any_available === false,
+      `no Bitcoin capability may be reported available: ${bitcoin.text.slice(0, 220)}`,
+    );
+    for (const cap of bitcoin.json.capabilities) {
+      assert(cap.available === false, `${cap.capability} must not be available`);
+      assert(
+        typeof cap.refused_because === 'string' && cap.refused_because.length > 30,
+        `${cap.capability} refuses with a reason too short to act on: ${JSON.stringify(cap)}`,
+      );
+      assert(
+        cap.capability.startsWith('bitcoin:'),
+        `the same colon shape as chain:evm:read: ${cap.capability}`,
+      );
+    }
+
+    // E-03's third criterion: exactly one of them is a platform question, and its answer names which
+    // question it answered. The runner's own platform decides which wording is correct, so this
+    // assertion holds on ubuntu, macOS and Windows alike.
+    const platformDependent = bitcoin.json.capabilities.filter((c) => c.platform_dependent);
+    assert(
+      platformDependent.length === 1 && platformDependent[0].capability === 'bitcoin:node:run',
+      `only node running is a platform question: ${JSON.stringify(platformDependent)}`,
+    );
+    const node = platformDependent[0];
+    if (bitcoin.json.target_os === 'linux') {
+      assert(
+        node.refused_because.includes('no Bitcoin node binary'),
+        `on Linux the reason is what the BUILD lacks: ${node.refused_because}`,
+      );
+    } else {
+      assert(
+        node.refused_because.includes('not Linux'),
+        `elsewhere the reason is the PLATFORM: ${node.refused_because}`,
+      );
+      assert(
+        node.refused_because.includes('refused rather than degraded'),
+        `and it must be a refusal rather than a downgrade: ${node.refused_because}`,
+      );
+    }
+
+    // The names are not `Capability` variants, asserted through the answer: `chain:evm:write` IS one
+    // and this plugin does not hold it, while none of these is one at all.
+    const caps = await settlement({ capability: 'plugin:lifecycle:read', op: 'capabilities' });
+    assert(
+      caps.json.holds_no_value_authority === true,
+      'the body still holds no authority to move value',
+    );
+    assert(
+      !caps.json.declares.some((c) => c.startsWith('bitcoin:')),
+      `a Bitcoin name must not be declared as held: ${JSON.stringify(caps.json.declares)}`,
+    );
+    assert(
+      String(bitcoin.json.not_capability_variants).includes('HOLD'),
+      `the answer must say why they are not capability variants: ${bitcoin.json.not_capability_variants}`,
+    );
+
+    // E-03's first criterion, with the premise corrected: the conclusion is that none may be claimed
+    // supported, and the answer says the plan's zero-hit premise changed.
+    assert(
+      String(bitcoin.json.the_plan_premise_changed).includes('CONCLUSION survives'),
+      `the answer must keep the conclusion and correct the premise: ${bitcoin.json.the_plan_premise_changed}`,
+    );
+    const rails = await settlement({ capability: 'plugin:lifecycle:read', op: 'rails' });
+    for (const label of ['lightning', 'taproot', 'rgb']) {
+      const rail = rails.json.rails.find((r) => r.rail === label);
+      assert(rail && rail.available === false, `${label} must not be available`);
+    }
+
+    return `three capabilities, none available, and the platform question answered where it runs`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
