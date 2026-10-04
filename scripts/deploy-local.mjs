@@ -2417,6 +2417,83 @@ async function main() {
     return `the policy writer has no ballot, the tally has no way to apply, and both say so`;
   });
 
+  // E-10's deliverable, reached through the two doors that carry it: the metrics the resource market
+  // derives, and the risk register's accepted list.
+  await check('the economy report is derived, and its three boundaries are accepted not mitigated', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    // The metrics are DERIVED, which is what makes a published figure checkable.
+    const metrics = await resource({ capability: 'plugin:lifecycle:read', op: 'metrics' });
+    assert(
+      metrics.status >= 200 && metrics.status < 300,
+      `metrics -> HTTP ${metrics.status}: ${metrics.text.slice(0, 220)}`,
+    );
+    assert(
+      String(metrics.json.reproducible).includes('DERIVED'),
+      `the report must say its figures are derived: ${metrics.json.reproducible}`,
+    );
+    assert(
+      String(metrics.json.no_total_across_kinds).includes('do not add up'),
+      `and must refuse a total across kinds: ${metrics.json.no_total_across_kinds}`,
+    );
+    // E-10's second criterion reaches here as the conservation identity: every per-kind book balances,
+    // and a non-zero discrepancy is what the gate and the ledger both refuse.
+    //
+    // The identity IS the zero-discrepancy check, and this check learned that the hard way: its first
+    // version asserted a per-row `discrepancy` field the metrics answer does not carry, and failed with
+    // "got undefined". `held == issued - consumed` is the same statement in the terms the answer
+    // actually uses -- the D-07 ledger computes `discrepancy` as `sum_of_balances - accounted`, and
+    // `accounted` is `issued - consumed`.
+    for (const row of metrics.json.by_kind) {
+      assert(
+        row.held === row.issued - row.consumed,
+        `${row.kind}: held ${row.held} must be issued ${row.issued} less consumed ${row.consumed}, ` +
+          `which is what zero discrepancy means for this kind`,
+      );
+    }
+    // And the report's own explanation names each kind with its unit, so a reader does not have to
+    // remember which number is bytes and which is invocations.
+    //
+    // The `conserved` boolean is deliberately NOT asserted here: this answer does not carry one -- that
+    // is `resource-audit`'s field -- and the identity above is the same statement in the terms `metrics`
+    // actually uses. Reaching for a field this answer does not have was this check's second mistake in
+    // a row, and the fix both times was to assert what the door returns rather than what the gate would
+    // like it to return.
+    const lines = metrics.json.explain;
+    assert(Array.isArray(lines) && lines.length >= 3, JSON.stringify(lines));
+
+    // The three boundaries E-10 names, in the register's ACCEPTED list rather than its mitigated one.
+    const risks = await settlement({ capability: 'plugin:lifecycle:read', op: 'risks' });
+    assert(risks.json.disjoint === true, JSON.stringify(risks.json.overlap));
+    const accepted = risks.json.accepted.map((r) => r.risk);
+    const mitigated = risks.json.mitigated.map((r) => r.risk);
+    for (const boundary of [
+      'the real scale of the agent economy',
+      'a cross-chain bridge being compromised',
+      'regulatory uncertainty',
+    ]) {
+      assert(
+        accepted.includes(boundary),
+        `\`${boundary}\` must be recorded as an ACCEPTED boundary: ${JSON.stringify(accepted)}`,
+      );
+      assert(
+        !mitigated.includes(boundary),
+        `and must NOT be in the mitigated list: ${JSON.stringify(mitigated)}`,
+      );
+    }
+    // And the register says which list a reader should look at first, because a register with only
+    // mitigations is a statement that nothing is wrong.
+    assert(
+      String(risks.json.read_this_first).includes('nothing is wrong'),
+      `the answer must say why the accepted list matters: ${risks.json.read_this_first}`,
+    );
+
+    return `figures derived with zero discrepancy, and the three boundaries accepted rather than mitigated`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

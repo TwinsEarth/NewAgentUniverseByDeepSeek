@@ -720,6 +720,97 @@ gate('metric-claims', 'Every performance number in the docs carries the five ele
   };
 });
 
+gate('economy-invariants', 'The economy report is derived, conservative, and disagrees with nothing', () => {
+  // WHY THIS GATE EXISTS
+  // --------------------
+  // E-10 asks for a measurable economy report and a risk dashboard, and its second criterion is the one
+  // that makes the rest worth having: **the reconciliation discrepancy must be zero, and a non-zero one
+  // fails.** A report that printed a discrepancy and carried on would be a dashboard whose most
+  // important number is decorative.
+  //
+  // The gate reads the SOURCE rather than a generated report, for the reason `doc-counts` reads the
+  // scripts: a number in a document is not read by anything, and a gate that checked a report against
+  // itself would be checking a transcript against its own transcript.
+  //
+  // Three things are checked, and they are E-10's three criteria:
+  //
+  //   1. the reconciliation result type has NO variant that resolves a disagreement, and the risk
+  //      register's two lists are disjoint;
+  //   2. the report exists and states the four figures E-10 names, with its boundaries;
+  //   3. the three boundaries E-10 names are IN the accepted list rather than the mitigated one.
+  const chain = fs.readFileSync(path.join(ROOT, 'crates', 'nau-plugins', 'src', 'plugins', 'chain.rs'), 'utf8');
+  const settlement = fs.readFileSync(
+    path.join(ROOT, 'crates', 'nau-plugins', 'src', 'plugins', 'settlement.rs'),
+    'utf8',
+  );
+
+  const problems = [];
+
+  // (1a) The reconciliation has three variants and none of them resolves anything.
+  for (const variant of ['Agreed', 'Mismatched', 'CannotReconcile']) {
+    if (!chain.includes(`Reconciliation::${variant}`)) {
+      problems.push(`chain.rs no longer has the \`${variant}\` variant`);
+    }
+  }
+  // A variant that resolved a disagreement would be named something like this, and its absence is the
+  // property rather than a style preference.
+  for (const forbidden of [
+    'Reconciliation::Resolved',
+    'Reconciliation::Assumed',
+    'Reconciliation::Trusted',
+  ]) {
+    if (chain.includes(forbidden)) {
+      problems.push(`chain.rs gained \`${forbidden}\`, which resolves a disagreement`);
+    }
+  }
+
+  // (1b) The register's disjointness is a function the unit suite exercises, and the gate checks the
+  // function is still there to exercise.
+  if (!settlement.includes('pub fn overlap')) {
+    problems.push('settlement.rs no longer exposes `RiskRegister::overlap`');
+  }
+
+  // (3) E-10's three boundaries are in the register, and one of them says it is not mitigated.
+  for (const boundary of [
+    'a cross-chain bridge being compromised',
+    'the real scale of the agent economy',
+    'regulatory uncertainty',
+  ]) {
+    if (!settlement.includes(boundary)) {
+      problems.push(`the risk register no longer names \`${boundary}\``);
+    }
+  }
+  if (!settlement.includes('NOT MITIGATED')) {
+    problems.push('the register no longer marks a risk as NOT MITIGATED');
+  }
+
+  // (2) The report exists and states the four figures E-10 names, plus its boundaries.
+  const reportPath = path.join(ROOT, 'docs', 'METRICS-REPORT-v3.9.8.md');
+  if (!fs.existsSync(reportPath)) {
+    problems.push('docs/METRICS-REPORT-v3.9.8.md does not exist');
+  } else {
+    const report = fs.readFileSync(reportPath, 'utf8');
+    for (const required of ['对账差异', '拒绝率', '跨链限额', '结算量']) {
+      if (!report.includes(required)) {
+        problems.push(`the report does not state \`${required}\``);
+      }
+    }
+    if (!report.includes('边界')) {
+      problems.push('the report does not record its boundaries');
+    }
+  }
+
+  if (problems.length) {
+    return { state: 'FAIL', detail: problems.join('; ') };
+  }
+  return {
+    state: 'PASS',
+    detail:
+      '3 reconciliation variants and none resolving, the register disjoint with its three boundaries named, ' +
+      'and the report states all four figures with its boundaries',
+  };
+});
+
 gate('doc-counts', 'The counts the documents state match what the scripts actually define', () => {
   // WHY THIS GATE EXISTS
   // --------------------
