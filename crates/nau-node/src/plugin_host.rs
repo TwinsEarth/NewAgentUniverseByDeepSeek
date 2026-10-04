@@ -524,6 +524,54 @@ mod tests {
     }
 
     #[test]
+    fn a_quarantined_plugin_has_nothing_to_stop_and_that_is_not_a_failure() {
+        // The deployment check found this, twice, on the two platforms where the shutdown check
+        // runs and nowhere else.
+        //
+        // v3.7.1's C-03 check quarantines a plugin on purpose. The shutdown check runs later in
+        // the same suite, asks that plugin to stop, and `Quarantined` has no edge to `Stopping` --
+        // its only successors are `Archived` and `Blacklisted`. The transition was refused, the
+        // failure was counted, and the deployment reported "1 plugin(s) could not be stopped"
+        // about a plugin that holds no instance and cannot be loaded.
+        //
+        // The local run was green and could not have been otherwise: Windows does not deliver a
+        // graceful stop through `child.kill()`, so that check skips there. A test that runs
+        // everywhere is the only way this stays fixed.
+        let dir = temp_dir("quarantined-shutdown");
+        let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");
+        let victim = "com.twinsearth.sys.security.tribunal";
+
+        for n in 1..=nau_plugin::lifecycle::VIOLATION_THRESHOLD {
+            boot.record_violation(victim, "for the shutdown test", NOW + u64::from(n))
+                .expect("recorded");
+        }
+        assert_eq!(boot.state(victim), Some(PluginState::Quarantined));
+
+        let outcomes = boot.shutdown(NOW + 100);
+        let (_, result) = outcomes
+            .iter()
+            .find(|(name, _)| name == victim)
+            .expect("the quarantined plugin must appear in the outcomes");
+        assert!(
+            result.is_ok(),
+            "a quarantined plugin has nothing to stop, so stopping it must not be a failure: \
+             {result:?}"
+        );
+        // And it stays quarantined rather than becoming `Stopped`, which is the truth: it was
+        // never running, so it did not stop.
+        assert_eq!(boot.state(victim), Some(PluginState::Quarantined));
+
+        // Every other plugin still stops normally, so the early return did not become a way to
+        // skip shutting anything down.
+        for (name, result) in &outcomes {
+            assert!(result.is_ok(), "{name} refused to stop: {result:?}");
+            if name != victim {
+                assert_eq!(boot.state(name), Some(PluginState::Stopped), "{name}");
+            }
+        }
+    }
+
+    #[test]
     fn every_plugin_stops_and_a_stopped_plugin_does_not_answer() {
         let dir = temp_dir("shutdown");
         let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");

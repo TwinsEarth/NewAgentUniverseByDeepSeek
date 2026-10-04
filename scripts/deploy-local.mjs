@@ -885,7 +885,23 @@ async function main() {
       `the daemon booted ${bootedPluginCount} plugin(s) and stopped ${m[1]}; every plugin it ` +
         `started must be stopped`,
     );
-    assert(Number(m[2]) === 0, `${m[2]} plugin(s) could not be stopped`);
+    // The count alone was not enough to diagnose this, and the failure that proved it is worth
+    // recording: at v3.7.1 this line failed with "1 plugin(s) could not be stopped" on macOS and
+    // ubuntu, and finding out WHICH plugin took reading the runner's log by hand. The daemon
+    // already prints the name and the reason on the lines after the summary; the assertion was
+    // throwing them away.
+    if (Number(m[2]) !== 0) {
+      const after = log
+        .slice(log.indexOf(m[0]) + m[0].length)
+        .split('\n')
+        .slice(0, 4)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      assert(
+        false,
+        `${m[2]} plugin(s) could not be stopped: ${after.length ? after.join(' | ') : 'the daemon named none'}`,
+      );
+    }
     return `daemon stopped ${m[1]} of ${bootedPluginCount} plugin(s), none failed`;
   });
 

@@ -909,6 +909,29 @@ impl SystemPluginHost {
         let entry = self.entries.get_mut(name).ok_or_else(|| {
             PluginError::Manifest(format!("`{name}` is not a registered system plugin"))
         })?;
+        // A plugin that is already out of service has nothing to stop, and asking it to stop is
+        // not merely redundant -- it fails.
+        //
+        // `Quarantined` has no edge to `Stopping`: its only successors are `Archived` and
+        // `Blacklisted`. So the transition below is refused, the failure is counted, and the
+        // deployment's shutdown check reports "1 plugin(s) could not be stopped" about a plugin
+        // that holds no instance and cannot be loaded.
+        //
+        // That is exactly what happened at v3.7.1: the C-03 deployment check quarantines a plugin
+        // on purpose, the shutdown check runs later in the same suite, and the two together made a
+        // correct quarantine look like a shutdown defect. It reported on macOS and ubuntu and not
+        // on Windows, because the shutdown check does not run there -- so the local run was green
+        // and could not have been otherwise.
+        //
+        // Returning `Ok` is the honest answer rather than a tolerated failure: there is genuinely
+        // nothing to do, and the plugin is already unable to serve. The log says which state it
+        // was in, so an operator reading a shutdown sees it rather than inferring it.
+        if entry.lifecycle.state() == PluginState::Quarantined {
+            entry
+                .ctx
+                .log(LogLevel::Info, "quarantined; there is no instance to stop");
+            return Ok(());
+        }
         entry.lifecycle.transition(
             PluginState::Stopping,
             "the host asked this plugin to stop",
@@ -1211,7 +1234,12 @@ pub fn standard_plugins(
         // the running node is the failure the roster test was written for, and the deployment
         // check that calls one of them over HTTP is what proves they are really booted.
         Box::new(crate::plugins::security::PolicePlugin::new()?),
-        Box::new(crate::plugins::security::SurveillancePlugin::new()?),
+        // Surveillance is the one body given a directory, because C-04 requires its observations
+        // to land on disk and survive a restart. The others keep nothing, and handing them a path
+        // they do not use would suggest they do.
+        Box::new(crate::plugins::security::SurveillancePlugin::open(
+            storage_dir.join("security-surveillance"),
+        )?),
         Box::new(crate::plugins::security::AuditPlugin::new()?),
         Box::new(crate::plugins::security::RegistryPlugin::new()?),
         Box::new(crate::plugins::security::ReportPlugin::new()?),
