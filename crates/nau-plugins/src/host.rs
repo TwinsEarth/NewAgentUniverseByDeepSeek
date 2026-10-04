@@ -1241,7 +1241,11 @@ pub fn standard_plugins(
             storage_dir.join("security-surveillance"),
         )?),
         Box::new(crate::plugins::security::AuditPlugin::new()?),
-        Box::new(crate::plugins::security::RegistryPlugin::new()?),
+        // The registry keeps the trust store, so it is the second body given a directory: C-06
+        // requires the keys an operator trusted to still be trusted after a restart.
+        Box::new(crate::plugins::security::RegistryPlugin::open(
+            storage_dir.join("security-registry"),
+        )?),
         Box::new(crate::plugins::security::ReportPlugin::new()?),
         Box::new(crate::plugins::security::TribunalPlugin::new()?),
     ])

@@ -879,6 +879,106 @@ async function main() {
     return 'unknown command reported, exit ' + code;
   });
 
+  // C-06's second criterion, first half: trust a key, so there is something a restart could lose.
+  //
+  // Placed BEFORE section 5 stops the daemon, and the first version of it was not. An earlier
+  // attempt sat after `stopDaemon` and before the restart, so every request in it failed with
+  // "fetch failed" and the check looked like a trust-store defect rather than a check running in a
+  // window where no daemon existed. A test that runs while the thing under test is stopped is not
+  // measuring the thing under test.
+  //
+  // A trust store in memory would re-verify every plugin at every boot, which is not forgetting a
+  // decision so much as never recording one. The restart below is the one section 5 already
+  // performs, which is why this is here: the event that proves the criterion is one the deployment
+  // already does.
+  const TRUSTED_KEY = 'aa'.repeat(32);
+  await check('a key can be trusted and the store moves from nobody to somebody', async () => {
+    const before = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'trust',
+    });
+    assert(before.status === 200, `trust -> HTTP ${before.status}: ${before.text.slice(0, 160)}`);
+    assert(
+      before.json && typeof before.json.trusted === 'number',
+      `the store must report how many keys it holds: ${before.text.slice(0, 160)}`,
+    );
+    // The STARTING COUNT is read rather than assumed to be zero.
+    //
+    // The first version asserted `trusted === 0`, which is true of a fresh data directory and false
+    // of one a previous run left behind -- so the check passed when run alone and failed inside
+    // verify-all, where the prefix is reused. That is the deployment-check equivalent of a test
+    // that depends on the order it runs in.
+    //
+    // What matters is the TRANSITION: trust a key and the count goes up by one, whatever it was.
+    // That is the property C-06 needs, and it is independent of what the directory already held.
+    const startedAt = before.json.trusted;
+
+    // Self-healing rather than precondition-checking, and this is the third shape this check has
+    // had. It started by asserting the store was empty, which is true of a fresh directory and
+    // false of a reused one. It then refused to run if the key was already trusted, which is
+    // correct and still leaves the suite failing on a directory an EARLIER FAILED RUN left behind
+    // -- including the run that failed before reaching its own cleanup.
+    //
+    // So the key is revoked first if it is there. A check that can only run on a pristine directory
+    // is a check that fails for reasons that have nothing to do with what it tests, and
+    // verify-all's prefix is deliberately long-lived.
+    if ((before.json.vendor || []).includes(TRUSTED_KEY)) {
+      const cleared = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+        capability: 'kernel:plugin:manage',
+        op: 'revoke',
+        key: TRUSTED_KEY,
+      });
+      assert(
+        cleared.status >= 200 && cleared.status < 300,
+        `could not clear a leftover key: HTTP ${cleared.status}: ${cleared.text.slice(0, 160)}`,
+      );
+    }
+    const from = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'trust',
+    });
+    const startedFrom = from.json.trusted;
+
+    const added = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'kernel:plugin:manage',
+      op: 'trust-add',
+      key: TRUSTED_KEY,
+      kind: 'vendor',
+    });
+    assert(
+      added.status >= 200 && added.status < 300,
+      `trust-add -> HTTP ${added.status}: ${added.text.slice(0, 200)}`,
+    );
+    assert(
+      added.json && added.json.trusted === startedFrom + 1,
+      `trusting one key must add exactly one, from ${startedFrom}: ${JSON.stringify(added.json).slice(0, 160)}`,
+    );
+
+    // The store now answers for that key, and still refuses a stranger -- the fail-closed direction
+    // observed rather than merely described.
+    const verified = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'verify',
+      key: TRUSTED_KEY,
+      kind: 'vendor',
+    });
+    assert(
+      verified.json && verified.json.trusted === true,
+      `the key just trusted must verify, got ${JSON.stringify(verified.json).slice(0, 160)}`,
+    );
+    const stranger = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'verify',
+      key: 'bb'.repeat(32),
+      kind: 'vendor',
+    });
+    assert(
+      stranger.json && stranger.json.trusted === false,
+      `a key nobody trusted must not verify, got ${JSON.stringify(stranger.json).slice(0, 160)}`,
+    );
+    return '0 -> 1 trusted key, and a stranger is still refused';
+  });
+
   head('5. THE DEPLOYMENT PROPERTY: state survives a restart');
   await stopDaemon(daemon);
   say('  [deploy] daemon stopped; restarting against the same data directory');
@@ -974,6 +1074,55 @@ async function main() {
   await check('restarted daemon becomes healthy', async () => {
     await waitHealthy();
     return 'healthy';
+  });
+
+  // C-06's second criterion, second half: the trusted key is still trusted after the restart.
+  //
+  // The count alone would not be enough -- a store that came back holding some other key would pass
+  // it -- so the key itself is asserted to be in the list. The count is compared with what the first
+  // half ended at rather than with a literal, for the same reason that half reads its starting
+  // value: a reused data directory is normal and the check must not depend on being first.
+  await check('the trusted key survived the restart', async () => {
+    const r = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'trust',
+    });
+    assert(r.status === 200, `trust -> HTTP ${r.status}: ${r.text.slice(0, 160)}`);
+    assert(
+      Array.isArray(r.json.vendor) && r.json.vendor.includes(TRUSTED_KEY),
+      `the key itself must come back after the restart, not only a count: ${JSON.stringify(r.json.vendor)}`,
+    );
+    return `${r.json.trusted} key(s) trusted after the restart, including the one added before it, read from ${r.json.store}`;
+  });
+
+  // Put the store back the way it was found.
+  //
+  // Without this the suite is not idempotent: the first check needs a key that is NOT already
+  // trusted, so a second run against the same data directory fails its own precondition and looks
+  // like a trust-store defect. That is what happened -- the suite passed alone and failed inside
+  // verify-all, which reuses the prefix.
+  //
+  // Revoking rather than trusting a different key each run, because a store that grows a key per
+  // run is one whose size stops meaning anything, and the point of this pair of checks is the
+  // transition, not the residue.
+  await check('the key the checks added is revoked, so a second run starts where this one did', async () => {
+    const r = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'kernel:plugin:manage',
+      op: 'revoke',
+      key: TRUSTED_KEY,
+    });
+    assert(r.status >= 200 && r.status < 300, `revoke -> HTTP ${r.status}: ${r.text.slice(0, 160)}`);
+    assert(r.json && r.json.was_trusted === true, `it was trusted and must be revoked: ${JSON.stringify(r.json).slice(0, 160)}`);
+
+    const after = await api('POST', '/plugins/com.twinsearth.sys.security.registry/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'trust',
+    });
+    assert(
+      !(after.json.vendor || []).includes(TRUSTED_KEY),
+      `the revoked key must be gone from the store: ${JSON.stringify(after.json.vendor)}`,
+    );
+    return `revoked; the store is back to what it held before these checks ran`;
   });
 
   await check('the deposited balance survived the restart', async () => {

@@ -485,7 +485,7 @@ OpenFileLimit  NetworkDeny  FilesystemConfinement  EnvAllowlist  WorkDirIsolatio
 | **度量规范** | 任何数字必须带 `(规模, 硬件, 负载, 基线, 定义)` 五要素 | v3.5.9 起，写入 `doc-counts` 同级的关卡 |
 | **能力最小化** | 新插件的能力令牌逐个评审；`sandbox:configure` 类需额外审批 | 每个中版本 |
 | **不变更既有语义** | `Tier`、`PluginState` 既有状态与边、账本守恒、结算收口**不得回退** | 全程 |
-| **验证入口** | `node scripts/verify-all.mjs`；当前 **22 道关卡 + 34 项部署检查**，每项交付后计数同步更新 | 全程 |
+| **验证入口** | `node scripts/verify-all.mjs`；当前 **22 道关卡 + 37 项部署检查**，每项交付后计数同步更新 | 全程 |
 
 ---
 
@@ -517,7 +517,7 @@ OpenFileLimit  NetworkDeny  FilesystemConfinement  EnvAllowlist  WorkDirIsolatio
 - 沙箱**做不到就拒绝**（无法强制的边界要求书面豁免，缺豁免返回 422）
 - `Tier` 与 `PluginState` 的**既有状态与边**
 - 每个公开项有文档、`#![forbid(unsafe_code)]`、无 `unwrap/expect/panic!`（测试外）
-- 22 道关卡 + 34 项部署检查全绿
+- 22 道关卡 + 37 项部署检查全绿
 
 ---
 

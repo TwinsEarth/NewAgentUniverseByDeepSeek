@@ -19,6 +19,8 @@
 //! [`Manifest`]: nau_plugin::Manifest
 //! [`TrustStore`]: nau_plugin::TrustStore
 
+use std::path::Path;
+
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
 use nau_plugin::{PluginId, Result};
@@ -27,13 +29,20 @@ use serde_json::{json, Value};
 use crate::host::{HostContext, LogLevel, PluginGrant, SystemPlugin};
 use crate::payload;
 
+use super::trust::TrustFile;
+
 /// The operations this plugin implements.
-pub const OPERATIONS: &[&str] = &["capabilities", "trust", "verify"];
+pub const OPERATIONS: &[&str] = &["capabilities", "trust", "verify", "trust-add", "revoke"];
 
 /// The registry system plugin.
 pub struct RegistryPlugin {
     id: PluginId,
     grant: PluginGrant,
+    /// The keys this node has decided to trust, on disk.
+    ///
+    /// A store in memory would re-verify every plugin at every boot, which is not forgetting a
+    /// decision so much as never recording one. See `trust.rs`.
+    trust: TrustFile,
 }
 
 impl RegistryPlugin {
@@ -48,16 +57,27 @@ impl RegistryPlugin {
         Capability::KernelPluginManage,
     ];
 
-    /// Build the plugin.
+    /// Build the plugin, keeping its trust store under `dir`.
     ///
     /// # Errors
     ///
-    /// [`nau_plugin::PluginError::Name`] if the id is not a valid plugin name.
-    pub fn new() -> Result<Self> {
+    /// [`nau_plugin::PluginError::Name`] if the id is not a valid plugin name, or a refusal when an
+    /// existing trust store cannot be read.
+    pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             id: PluginId::parse(Self::ID)?,
             grant: PluginGrant::new(),
+            trust: TrustFile::open(dir.as_ref().join("trust.json"))?,
         })
+    }
+
+    /// A plugin with a store in a scratch place, for tests that do not care where it is.
+    ///
+    /// # Errors
+    ///
+    /// As [`RegistryPlugin::open`].
+    pub fn new() -> Result<Self> {
+        Self::open(std::env::temp_dir().join("nau-registry-unplaced"))
     }
 }
 
@@ -87,7 +107,10 @@ impl SystemPlugin for RegistryPlugin {
         // authority to ask what it holds would make the answer unavailable to exactly the caller
         // most likely to need it -- a reviewer checking a deployment.
         let needed = match op {
-            "capabilities" => Capability::LifecycleRead,
+            // A self-description and a question about the store need no authority beyond the read
+            // every plugin holds; adding or removing a key does, because it changes who this node
+            // will admit.
+            "capabilities" | "trust" | "verify" => Capability::LifecycleRead,
             _ => Capability::KernelPluginManage,
         };
         self.grant.require_operation(declared, needed)?;
@@ -109,24 +132,97 @@ impl SystemPlugin for RegistryPlugin {
                 Self::ID,
                 op,
                 json!({
-                    "store": "nau_plugin::TrustStore",
-                    // The property C-06 has to preserve, stated where the plugin is read.
-                    "persistence": "on disk, and surviving a restart",
+                    // Read from the file, so the number is what was actually written and survived
+                    // a restart rather than a counter that would reset and look the same.
+                    "trusted": self.trust.len(),
+                    "vendor": self.trust.vendor_keys(),
+                    "third_party": self.trust.third_party_keys(),
+                    "store": self.trust.path().display().to_string(),
+                    "empty_means": "nobody: the store starts from `TrustStore::deny_all` and adds \
+                                    only what the file holds, so a missing or empty file trusts no \
+                                    key at all rather than every key",
                     "signature_policy": "fail-closed: an unverifiable manifest is refused rather \
                                          than admitted with a warning",
-                    "implemented": false,
                 }),
             )),
-            "verify" => Ok(payload::answer(
-                Self::ID,
-                op,
-                json!({
-                    "uses": ["nau_plugin::Manifest", "nau_plugin::TrustStore"],
-                    "implemented": false,
-                    "why": "C-06 wires the existing verification; this release declares the body \
-                            and its authority so that a manifest granting it can be reviewed",
-                }),
-            )),
+            "trust-add" => {
+                let hex = payload::string_field(&msg.payload, "key")?;
+                let kind = payload::optional_string(&msg.payload, "kind")?
+                    .unwrap_or_else(|| "vendor".to_string());
+                match kind.as_str() {
+                    "vendor" => self.trust.trust_vendor(hex)?,
+                    "third_party" => self.trust.trust_third_party(hex)?,
+                    other => {
+                        return Err(payload::protocol(
+                            "unknown_kind",
+                            format!(
+                                "`{other}` is not a kind of key this store keeps; it holds \
+                                 `vendor` and `third_party`"
+                            ),
+                        ))
+                    }
+                }
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "trusted": self.trust.len(),
+                        "kind": kind,
+                        // The key is echoed back lowercased, which is how it is stored: a caller
+                        // comparing what it sent with what is held should not have to know that.
+                        "key": hex.to_ascii_lowercase(),
+                        "store": self.trust.path().display().to_string(),
+                    }),
+                ))
+            }
+            "revoke" => {
+                let hex = payload::string_field(&msg.payload, "key")?;
+                let was = self.trust.revoke(hex)?;
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "was_trusted": was,
+                        "trusted": self.trust.len(),
+                        // Revoking a key that is not there is not an error: an operator ensuring a
+                        // key is gone should not have to know whether it was ever added.
+                        "note": if was { "revoked" } else { "it was not trusted, which is the \
+                                                              state that was asked for" },
+                    }),
+                ))
+            }
+            "verify" => {
+                let hex = payload::string_field(&msg.payload, "key")?;
+                let kind = payload::optional_string(&msg.payload, "kind")?
+                    .unwrap_or_else(|| "vendor".to_string());
+                let store = self.trust.store()?;
+                let trusted = match kind.as_str() {
+                    "vendor" => store.is_trusted_vendor_key(hex),
+                    "third_party" => store.is_trusted_third_party_key(hex),
+                    other => {
+                        return Err(payload::protocol(
+                            "unknown_kind",
+                            format!("`{other}` is not a kind of key this store keeps"),
+                        ))
+                    }
+                };
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "key": hex.to_ascii_lowercase(),
+                        "kind": kind,
+                        "trusted": trusted,
+                        // The direction, said on every answer: an untrusted key is refused, not
+                        // admitted with a warning, and a node with an empty store refuses every
+                        // key there is.
+                        "policy": "fail-closed",
+                        "if_untrusted": "the manifest is refused, and no key is trusted when the \
+                                         store is empty",
+                        "trusted_keys": store.len(),
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }

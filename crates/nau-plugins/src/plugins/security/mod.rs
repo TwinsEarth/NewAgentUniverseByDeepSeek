@@ -45,6 +45,7 @@ pub mod report;
 pub mod surveillance;
 pub mod trail;
 pub mod tribunal;
+pub mod trust;
 
 pub use audit::AuditPlugin;
 pub use police::PolicePlugin;
