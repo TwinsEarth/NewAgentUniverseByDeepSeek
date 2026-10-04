@@ -1135,6 +1135,108 @@ async function main() {
     return `canonical sandbox:restore, and record_filed:false reported rather than glossed`;
   });
 
+  // D-07's three criteria. The second is the one worth attacking directly: a bound must be REFUSED
+  // rather than saturated, because a saturated figure is a silently wrong one and a conservation
+  // check over silently wrong numbers reports success.
+  await check('six kinds are conserved separately, and a bound is refused rather than saturated', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    // Two kinds, so that "reported BY KIND" is distinguishable from "reported once".
+    for (const [holder, kind, quantity] of [
+      ['did:example:ledger-a', 'cpu', 100],
+      ['did:example:ledger-a', 'network', 4096],
+      ['did:example:ledger-b', 'cpu', 50],
+    ]) {
+      const r = await resource({
+        capability: 'plugin:storage:own',
+        op: 'issue',
+        holder,
+        amount: { kind, quantity },
+      });
+      assert(
+        r.status >= 200 && r.status < 300,
+        `issue ${quantity} ${kind} -> HTTP ${r.status}: ${r.text.slice(0, 200)}`,
+      );
+      // Each answer is about ONE kind.
+      assert(r.json.kind === kind, `the answer must name the kind, got ${r.json.kind}`);
+      assert(typeof r.json.unit === 'string' && r.json.unit.length > 0, 'and its unit');
+    }
+
+    const consumed = await resource({
+      capability: 'plugin:storage:own',
+      op: 'consume',
+      holder: 'did:example:ledger-a',
+      amount: { kind: 'cpu', quantity: 40 },
+    });
+    assert(consumed.status < 300, `consume -> ${consumed.status}: ${consumed.text.slice(0, 200)}`);
+    assert(consumed.json.held === 60, `100 issued less 40 consumed, got ${consumed.json.held}`);
+
+    const audit = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'resource-audit',
+    });
+    assert(audit.json.conserved === true, `the books must be conserved: ${audit.text.slice(0, 220)}`);
+    assert(audit.json.unbalanced.length === 0, JSON.stringify(audit.json.unbalanced));
+    // Per-kind books, and each carries its own unit -- so two rows cannot be added up by accident.
+    const byKind = Object.fromEntries(audit.json.books.map((b) => [b.kind, b]));
+    assert(byKind.cpu && byKind.network, `cpu and network each have a book: ${JSON.stringify(Object.keys(byKind))}`);
+    assert(byKind.cpu.issued === 150, `cpu issued 100 + 50, got ${byKind.cpu.issued}`);
+    assert(byKind.cpu.consumed === 40);
+    assert(byKind.network.issued === 4096, 'network is a separate book, untouched by the cpu one');
+    assert(byKind.network.consumed === 0);
+    assert(
+      byKind.cpu.unit !== byKind.network.unit,
+      'the units differ, which is why a grand total would be meaningless',
+    );
+    // And the answer says so rather than leaving it to a reader.
+    assert(
+      String(audit.json.no_grand_total).includes('BY KIND'),
+      'the report must state that there is no total across kinds',
+    );
+
+    // Consuming more than is held is refused rather than going negative.
+    const overdraw = await resource({
+      capability: 'plugin:storage:own',
+      op: 'consume',
+      holder: 'did:example:ledger-a',
+      amount: { kind: 'cpu', quantity: 61 },
+    });
+    assert(overdraw.status === 400, `an overdraw must be refused, got HTTP ${overdraw.status}`);
+    assert(
+      overdraw.text.includes('cannot consume'),
+      `and must say so: ${overdraw.text.slice(0, 160)}`,
+    );
+
+    // Holding one kind does not permit spending another: the balance is per (holder, kind).
+    const wrongKind = await resource({
+      capability: 'plugin:storage:own',
+      op: 'consume',
+      holder: 'did:example:ledger-a',
+      amount: { kind: 'storage', quantity: 1 },
+    });
+    assert(
+      wrongKind.status === 400,
+      `holding cpu must not permit spending storage, got HTTP ${wrongKind.status}`,
+    );
+
+    // A zero quantity is refused by the amount's own constructor, on the wire as in code.
+    const zero = await resource({
+      capability: 'plugin:storage:own',
+      op: 'issue',
+      holder: 'did:example:ledger-a',
+      amount: { kind: 'cpu', quantity: 0 },
+    });
+    assert(zero.status === 400, `a zero amount must be refused, got HTTP ${zero.status}`);
+
+    // Nothing the refusals did may have unbalanced a book.
+    const after = await resource({ capability: 'plugin:lifecycle:read', op: 'resource-audit' });
+    assert(after.json.conserved === true, `refusals must not unbalance anything: ${after.text.slice(0, 220)}`);
+    assert(after.json.unbalanced.length === 0);
+
+    return `cpu and network conserved separately, refusals carried nothing, no total across kinds`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

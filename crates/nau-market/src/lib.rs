@@ -84,6 +84,7 @@ pub mod persistence;
 pub mod pricing;
 pub mod reputation;
 pub mod resource;
+pub mod resource_ledger;
 pub mod service;
 
 pub use actor::{Actor, Authority};
@@ -99,6 +100,7 @@ pub use resource::{
     ResourceBundle, ResourceDemand, ResourceKind, ResourceMatch, ResourceOffer,
     ResourceRegistration, ResourceRegistry, RestoreSettlement, SnapshotAsset,
 };
+pub use resource_ledger::{ResourceAudit, ResourceBook, ResourceLedger};
 pub use service::{Market, MarketConfig, MarketStats};
 
 /// Re-exported so callers of this crate need not depend on the ledger directly.

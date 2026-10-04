@@ -25,8 +25,8 @@
 //! other four releases are expressed in.
 
 use nau_market::{
-    MarketConfig, Price, PricingInput, ResourceDemand, ResourceKind, ResourceOffer,
-    ResourceRegistration, ResourceRegistry, SnapshotAsset,
+    MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand, ResourceKind,
+    ResourceLedger, ResourceOffer, ResourceRegistration, ResourceRegistry, SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -54,6 +54,11 @@ pub const OPERATIONS: &[&str] = &[
     // D-06: the snapshot asset and the restore that pays its author.
     "asset",
     "restore",
+    // D-07: the six books, reachable. A ledger nothing writes to is a conservation law nobody
+    // is subject to.
+    "issue",
+    "consume",
+    "resource-audit",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -103,6 +108,11 @@ pub struct ResourcePlugin {
     /// The rules inside it are the market's, read from its configuration rather than restated here:
     /// a second number meaning "how much must be locked" is a second number to keep in step.
     registry: ResourceRegistry,
+    /// Six kinds, six books.
+    ///
+    /// Separate state from the registry and from the money ledger, which is D-07's third
+    /// criterion: the three do not interfere, and that is a property of them being three types.
+    resources: ResourceLedger,
 }
 
 impl ResourcePlugin {
@@ -138,6 +148,7 @@ impl ResourcePlugin {
             grant: PluginGrant::new(),
             // The rules are the market's, read from its configuration rather than restated here.
             registry: ResourceRegistry::from_config(&MarketConfig::default()),
+            resources: ResourceLedger::new(),
         })
     }
 }
@@ -172,7 +183,11 @@ impl SystemPlugin for ResourcePlugin {
         // this body's own book, not policy over other plugins, and requiring `kernel:*` for it would
         // be claiming authority the operation does not exercise.
         let needed = match op {
-            "register" | "slash" => Capability::StorageOwn,
+            // Everything that writes state this body owns. D-07's `issue` and `consume` were added
+            // to the list after the deployment check caught them missing: a capability model that
+            // silently let a write through under a read would be one whose matrix describes
+            // something other than what the code does.
+            "register" | "slash" | "issue" | "consume" => Capability::StorageOwn,
             _ => Capability::LifecycleRead,
         };
         self.grant.require_operation(declared, needed)?;
@@ -488,6 +503,84 @@ impl SystemPlugin for ResourcePlugin {
                     }),
                 ))
             }
+            "issue" | "consume" => {
+                let amount: ResourceAmount =
+                    serde_json::from_value(payload::field(&msg.payload, "amount")?.clone())
+                        .map_err(|e| {
+                            payload::protocol(
+                                "malformed_amount",
+                                format!("an amount needs a kind and a positive quantity: {e}"),
+                            )
+                        })?;
+                let holder = payload::string_field(&msg.payload, "holder")?;
+                // The refusal is carried across rather than re-worded: D-07's second criterion is
+                // that a bound is REFUSED rather than saturated, and the caller should read the
+                // message saying which total would have overflowed.
+                if op == "issue" {
+                    self.resources
+                        .issue(holder, amount)
+                        .map_err(|e| payload::protocol("cannot_issue", e))?;
+                } else {
+                    self.resources
+                        .consume(holder, amount)
+                        .map_err(|e| payload::protocol("cannot_consume", e))?;
+                }
+                let kind = amount.kind();
+                let audit = self.resources.audit();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "holder": holder,
+                        "kind": kind.label(),
+                        "unit": kind.unit(),
+                        "issued": audit.book_of(kind).issued,
+                        "consumed": audit.book_of(kind).consumed,
+                        "sum_of_balances": audit.book_of(kind).sum_of_balances,
+                        "held": self.resources.held(holder, kind),
+                        // Per KIND, never a total: a surplus of one kind hiding a deficit of another
+                        // is the failure this module is built to make visible.
+                        "discrepancy": audit.discrepancy_of(kind).to_string(),
+                        "conserved": audit.is_conserved(),
+                    }),
+                ))
+            }
+            "resource-audit" => {
+                let audit = self.resources.audit();
+                let books: Vec<Value> = audit
+                    .kinds()
+                    .into_iter()
+                    .map(|kind| {
+                        let book = audit.book_of(kind);
+                        json!({
+                            "kind": kind.label(),
+                            "unit": kind.unit(),
+                            "issued": book.issued,
+                            "consumed": book.consumed,
+                            "sum_of_balances": book.sum_of_balances,
+                            "accounted": book.accounted(),
+                            "discrepancy": book.discrepancy().to_string(),
+                        })
+                    })
+                    .collect();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "books": books,
+                        "kinds_with_a_book": books.len(),
+                        "conserved": audit.is_conserved(),
+                        "unbalanced": audit.unbalanced().iter().map(|(k, d)| json!({
+                            "kind": k.label(),
+                            "discrepancy": d.to_string(),
+                        })).collect::<Vec<_>>(),
+                        "no_grand_total": "there is deliberately no total across kinds: a surplus of \
+                                           one hiding a deficit of another is exactly what a \
+                                           single-dimension check would call conserved, and this \
+                                           report answers BY KIND or not at all",
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }
@@ -501,7 +594,6 @@ impl SystemPlugin for ResourcePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nau_market::ResourceAmount;
 
     fn offer() -> ResourceOffer {
         ResourceOffer {
