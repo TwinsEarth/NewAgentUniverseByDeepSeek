@@ -386,6 +386,65 @@ async function main() {
   // quarantine is not undoable -- `Quarantined` is terminal in this repository -- so a check that
   // quarantined a plugin a later check needed would break the suite in a way that looked like the
   // later check's fault.
+  // C-05's two criteria, in the running node.
+  //
+  // The first is answered by reading the assessment back: it must carry factors and a band and no
+  // bare score. The second is answered by ATTACKING it -- the check sends an observation about the
+  // subject in the request and requires a refusal. A check that only read a clean answer would pass
+  // against a plugin that accepted self-reports and ignored them.
+  await check('an assessment explains itself and refuses to be told what to think', async () => {
+    const subject = 'com.twinsearth.sys.security.police';
+    const good = await api('POST', '/plugins/com.twinsearth.sys.security.audit/assess', {
+      subject,
+    });
+    assert(
+      good.status >= 200 && good.status < 300,
+      `assess -> HTTP ${good.status}: ${good.text.slice(0, 200)}`,
+    );
+    const a = good.json && good.json.assessment;
+    assert(a, `the route must return an assessment, got ${good.text.slice(0, 160)}`);
+    assert(
+      Array.isArray(a.factors) && a.factors.length > 0,
+      `an assessment must carry factors, not only a verdict: ${JSON.stringify(a).slice(0, 200)}`,
+    );
+    for (const f of a.factors) {
+      assert(
+        typeof f.name === 'string' && f.name.length > 0 && typeof f.observed === 'string' && f.observed.length > 0,
+        `every factor must name what it looked at and what it found: ${JSON.stringify(f)}`,
+      );
+      assert(typeof f.weight === 'number', `every factor must carry its weight: ${JSON.stringify(f)}`);
+    }
+    assert(
+      typeof a.band === 'string' && ['low', 'elevated', 'high'].includes(a.band),
+      `an assessment must band, got ${a.band}`,
+    );
+    assert(
+      a.score === undefined,
+      `there must be no score field to return; the answer carried one: ${JSON.stringify(a).slice(0, 200)}`,
+    );
+    assert(
+      Array.isArray(a.unobserved) && a.unobserved.length > 0,
+      'an assessment must say what it could not look at',
+    );
+
+    // Criterion two, as an attack rather than an observation.
+    for (const key of ['violations', 'state', 'score']) {
+      const bad = await api('POST', '/plugins/com.twinsearth.sys.security.audit/assess', {
+        subject,
+        [key]: key === 'state' ? 'running' : 0,
+      });
+      assert(
+        bad.status === 400,
+        `a request carrying \`${key}\` must be refused, got HTTP ${bad.status}: ${bad.text.slice(0, 160)}`,
+      );
+      assert(
+        bad.text.includes('self_reported_observation'),
+        `the refusal must name the rule, got: ${bad.text.slice(0, 200)}`,
+      );
+    }
+    return `${a.factors.length} factor(s), band ${a.band}, and 3 self-reporting keys refused`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

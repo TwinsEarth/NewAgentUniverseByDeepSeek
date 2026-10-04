@@ -961,6 +961,74 @@ fn dispatch(
             }
         }
 
+        // `POST /plugins/com.twinsearth.sys.security.audit/assess` — C-05's assessment.
+        //
+        // # Why the host supplies the observations
+        //
+        // The audit body may not rest on what the subject says about itself, and the lifecycles are
+        // the host's -- the same finding C-03 and C-04 arrived at from two other directions. So the
+        // caller sends `subject` and nothing else, the host reads the state and the violation count
+        // it already owns, and the plugin assesses what it is given.
+        //
+        // A caller that tries to hand in its own observations is refused by the plugin rather than
+        // by this route. That is deliberate: the rule belongs to the body that makes the
+        // assessment, and putting a copy of it here would be a second place to keep in step.
+        ["plugins", "com.twinsearth.sys.security.audit", "assess"] => {
+            if method != "POST" {
+                return Response::method_not_allowed(&["POST"]);
+            }
+            let Some(body) = body else {
+                return Response::error(400, "an assessment needs a JSON body naming `subject`");
+            };
+            let Some(subject) = body.get("subject").and_then(Value::as_str) else {
+                return Response::error(400, "an assessment must name the `subject`");
+            };
+            // Read from the host, which is the only place these facts exist. `None` means the
+            // subject is not a plugin this node runs, and that is refused rather than assessed:
+            // an assessment of something nobody can point at is not one.
+            let Some(state) = node.plugins().state(subject) else {
+                return Response::error(
+                    400,
+                    format!("`{subject}` is not a registered system plugin, so there is nothing to assess"),
+                );
+            };
+            let violations = node.plugins().violations(subject).unwrap_or(0);
+
+            // The caller's body is passed through and the host's observations are **added**, rather
+            // than the payload being rebuilt from scratch.
+            //
+            // That is not tidiness. The plugin refuses a request carrying a self-reported
+            // observation, and rebuilding the payload would have dropped such a key before the
+            // plugin ever saw it -- so the rule would hold in the unit tests and be unreachable
+            // through the only door a caller has. Cleaning the request here would also put a second
+            // copy of the rule in the router, which is the thing that goes stale.
+            let mut payload = body.clone();
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("op".to_string(), Value::String("assess".to_string()));
+                object.insert("subject".to_string(), Value::String(subject.to_string()));
+                object.insert(
+                    "observations".to_string(),
+                    json!({
+                        "state": state.label(),
+                        "violations": violations,
+                        "threshold": nau_plugin::lifecycle::VIOLATION_THRESHOLD,
+                    }),
+                );
+            }
+            match node.plugins_mut().call(
+                "com.twinsearth.sys.security.audit",
+                "plugin:lifecycle:read",
+                payload,
+                now,
+            ) {
+                Ok(answer) => Response::ok(json!({
+                    "assessment": answer,
+                    "observed_by": "the node, from the lifecycle it owns",
+                })),
+                Err(refusal) => Response::error(400, refusal),
+            }
+        }
+
         // ------------------------------------------------------ the bus (PMB)
         //
         // The internal messaging protocol's **external** interface. Until this route existed

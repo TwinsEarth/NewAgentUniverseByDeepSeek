@@ -43,6 +43,7 @@ pub mod police;
 pub mod registry;
 pub mod report;
 pub mod surveillance;
+pub mod trail;
 pub mod tribunal;
 
 pub use audit::AuditPlugin;

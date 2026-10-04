@@ -305,7 +305,7 @@ tarball 直链：`https://registry.npmjs.org/@twinsearth/nau-dsh-plugin/-/nau-ds
 node scripts/verify-all.mjs
 ```
 
-**22 道关卡** + **33 项部署检查**。缺少外部工具时该关卡标为 **SKIP 并列入 NOT VERIFIED**——
+**22 道关卡** + **34 项部署检查**。缺少外部工具时该关卡标为 **SKIP 并列入 NOT VERIFIED**——
 不静默通过，也不假装通过；需要全部通过时加 `--allow-missing-tools` 会反过来失败。
 
 ---
