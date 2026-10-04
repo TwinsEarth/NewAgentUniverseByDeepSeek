@@ -25,8 +25,8 @@
 //! other four releases are expressed in.
 
 use nau_market::{
-    MarketConfig, ResourceDemand, ResourceKind, ResourceOffer, ResourceRegistration,
-    ResourceRegistry,
+    MarketConfig, Price, PricingInput, ResourceDemand, ResourceKind, ResourceOffer,
+    ResourceRegistration, ResourceRegistry,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -51,6 +51,8 @@ pub const OPERATIONS: &[&str] = &[
     // D-04: the matcher, reachable. An eligibility filter nothing calls is a rule nobody can be
     // refused by.
     "match",
+    // D-05: the pricing terms, reachable for the same reason.
+    "price",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -388,6 +390,41 @@ impl SystemPlugin for ResourcePlugin {
                         "reputations_source": "the request, for now: this body holds no reputation \
                                                store, and reaching into the market's would be the \
                                                second source of truth D-09 is about",
+                    }),
+                ))
+            }
+            "price" => {
+                let input: PricingInput =
+                    serde_json::from_value(payload::field(&msg.payload, "input")?.clone())
+                        .map_err(|e| {
+                            payload::protocol(
+                                "malformed_pricing_input",
+                                format!(
+                                    "a pricing input needs a positive base and the tracks it wants \
+                                     applied: {e}"
+                                ),
+                            )
+                        })?;
+                let price =
+                    Price::compute(&input).map_err(|e| payload::protocol("cannot_price", e))?;
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        // The terms, not a number on its own: `Price` has no amount field, so there
+                        // is nothing else this answer COULD carry.
+                        "base_minor": price.base_minor(),
+                        "adjustments": price.adjustments().iter().map(|a| json!({
+                            "track": a.track,
+                            "bps": a.bps,
+                            "delta_minor": a.delta_minor(price.base_minor()),
+                            "because": a.because,
+                        })).collect::<Vec<_>>(),
+                        "net_bps": price.net_bps(),
+                        "total_minor": price.total_minor(),
+                        "explain": price.explain(),
+                        "exact_integers": "every term is an integer number of basis points of an \
+                                           integer base; there is no fractional component to lose",
                     }),
                 ))
             }

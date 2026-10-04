@@ -978,6 +978,95 @@ async function main() {
     return `excluded the twenty-times-cheaper tolerant node and named why; a tolerant task saw both`;
   });
 
+  // D-05's two criteria: a price carries its terms rather than a bare number, and every term is an
+  // exact integer number of basis points.
+  await check('a price carries its terms, and every term is an exact integer', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const priced = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'price',
+      input: {
+        base_minor: 10_000,
+        scarcity_bps: 2_500,
+        reputation_bps: 9_000,
+        reputation_floor_bps: 1_000,
+        latency: 'interactive',
+        snapshot_reuses: 3,
+      },
+    });
+    assert(
+      priced.status >= 200 && priced.status < 300,
+      `price -> HTTP ${priced.status}: ${priced.text.slice(0, 220)}`,
+    );
+    const adjustments = priced.json.adjustments;
+    assert(
+      Array.isArray(adjustments) && adjustments.length === 4,
+      `the four tracks the plan names, got ${JSON.stringify(adjustments)}`,
+    );
+    assert(
+      adjustments.map((a) => a.track).join(',') ===
+        'scarcity,reputation,latency,snapshot-royalty',
+      `the tracks must be the four, in order: ${JSON.stringify(adjustments.map((a) => a.track))}`,
+    );
+    for (const a of adjustments) {
+      assert(
+        typeof a.because === 'string' && a.because.length > 20,
+        `every term must say WHY, in words: ${JSON.stringify(a)}`,
+      );
+      // The contribution is an exact integer, and it is the truncation of the basis-point product
+      // rather than a rounded figure.
+      const exact = Math.trunc((priced.json.base_minor * a.bps) / 10_000);
+      assert(
+        a.delta_minor === exact,
+        `term ${a.track}: ${a.delta_minor} must be the truncated product ${exact}`,
+      );
+    }
+    assert(
+      Array.isArray(priced.json.explain) && priced.json.explain.length === 5,
+      `four terms and a total: ${JSON.stringify(priced.json.explain)}`,
+    );
+
+    // The total is DERIVED: it is the base plus the terms, and this script computes it that way
+    // rather than trusting the answer's own arithmetic.
+    const sum = priced.json.base_minor + adjustments.reduce((n, a) => n + a.delta_minor, 0);
+    assert(
+      priced.json.total_minor === Math.max(0, sum),
+      `the total must be the terms added up: ${priced.json.total_minor} vs ${sum}`,
+    );
+
+    // The direction that makes idle capacity worth selling: a task that can wait is cheaper.
+    const cheaper = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'price',
+      input: { base_minor: 10_000, latency: 'tolerant' },
+    });
+    const dearer = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'price',
+      input: { base_minor: 10_000, latency: 'interactive' },
+    });
+    assert(
+      cheaper.json.total_minor < 10_000 && dearer.json.total_minor > 10_000,
+      `tolerant ${cheaper.json.total_minor} < base < interactive ${dearer.json.total_minor}`,
+    );
+
+    // A price from nothing is refused, because every adjustment of zero is zero and the answer
+    // would explain nothing while looking computed.
+    const fromNothing = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'price',
+      input: { base_minor: 0 },
+    });
+    assert(
+      fromNothing.status === 400,
+      `a price from a zero base must be refused, got HTTP ${fromNothing.status}`,
+    );
+
+    return `4 terms each with a reason, the total re-derived here, and a zero base refused`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

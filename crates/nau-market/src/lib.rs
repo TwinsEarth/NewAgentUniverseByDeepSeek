@@ -81,6 +81,7 @@
 pub mod actor;
 pub mod matching;
 pub mod persistence;
+pub mod pricing;
 pub mod reputation;
 pub mod resource;
 pub mod service;
@@ -91,6 +92,7 @@ pub use persistence::{
     MarketSnapshot, RestoreDefect, RestoreReport, MARKET_PROTOCOL_KEY, MARKET_STATE_KEY,
     MARKET_STATE_SCHEMA, MARKET_VERSION_KEY,
 };
+pub use pricing::{Adjustment, Price, PricingInput};
 pub use reputation::Reputation;
 pub use resource::{
     match_demand, LatencyClass, MeteredAmount, RankedOffer, ResourceAmount, ResourceBundle,
