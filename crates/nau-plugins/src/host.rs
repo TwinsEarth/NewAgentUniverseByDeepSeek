@@ -1222,6 +1222,10 @@ pub fn standard_plugins(
         // this build can run and refuses the ones it cannot, with the reason. It holds
         // the split `sandbox:create` / `sandbox:configure` pair and no policy authority.
         Box::new(crate::plugins::ausec::AUSecPlugin::new()?),
+        // The resource vocabulary: what this network trades, and what it refuses to claim it
+        // trades. Assembled here rather than declared in a document, because D-02 requires the
+        // refusal to be something a caller can query.
+        Box::new(crate::plugins::resource::ResourcePlugin::new()?),
         // ---- the six security organisations (C-01, v3.7.0) ----
         //
         // Six bodies rather than one, because a plugin's capability set is its authority and one
@@ -1331,6 +1335,10 @@ pub fn standard_declarations() -> Vec<(&'static str, &'static [Capability])> {
         (
             crate::plugins::ausec::AUSecPlugin::ID,
             crate::plugins::ausec::AUSecPlugin::CAPABILITIES,
+        ),
+        (
+            crate::plugins::resource::ResourcePlugin::ID,
+            crate::plugins::resource::ResourcePlugin::CAPABILITIES,
         ),
         // The six security organisations, declared where they are assembled. Written out rather
         // than derived from `SECURITY_PLUGINS`, because this function's output is what the

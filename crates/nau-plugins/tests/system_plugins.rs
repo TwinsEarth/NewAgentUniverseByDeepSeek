@@ -112,6 +112,10 @@ fn the_standard_set_is_every_documented_plugin_with_the_documented_capabilities(
         "com.twinsearth.sys.security.registry",
         "com.twinsearth.sys.security.report",
         "com.twinsearth.sys.security.tribunal",
+        // D-01. The resource vocabulary is a T0 plugin like any other, and it is listed here for the
+        // same reason as the six above: a plugin that exists in the catalogue and not in the
+        // running node is the failure this list was written for.
+        "com.twinsearth.sys.resource",
     ] {
         assert!(ids.contains(&expected), "{expected} is not declared");
     }

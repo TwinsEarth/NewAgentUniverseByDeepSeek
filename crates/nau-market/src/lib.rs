@@ -82,6 +82,7 @@ pub mod actor;
 pub mod matching;
 pub mod persistence;
 pub mod reputation;
+pub mod resource;
 pub mod service;
 
 pub use actor::{Actor, Authority};
@@ -91,6 +92,7 @@ pub use persistence::{
     MARKET_STATE_SCHEMA, MARKET_VERSION_KEY,
 };
 pub use reputation::Reputation;
+pub use resource::{MeteredAmount, ResourceAmount, ResourceBundle, ResourceKind, ResourceOffer};
 pub use service::{Market, MarketConfig, MarketStats};
 
 /// Re-exported so callers of this crate need not depend on the ledger directly.

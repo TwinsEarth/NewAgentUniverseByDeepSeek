@@ -704,6 +704,65 @@ async function main() {
     return 'refused by name at layer one, and a declared capability still served';
   });
 
+  // D-01's third and fourth criteria, and D-02's: the resource vocabulary is booted, the six kinds
+  // carry six distinct units, and the ten capabilities this workspace does not have are refused BY
+  // NAME rather than described in a document.
+  await check('the resource vocabulary is booted, with its units and its refusals', async () => {
+    const kinds = await api('POST', '/plugins/com.twinsearth.sys.resource/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'kinds',
+    });
+    assert(
+      kinds.status >= 200 && kinds.status < 300,
+      `kinds -> HTTP ${kinds.status}: ${kinds.text.slice(0, 200)}`,
+    );
+    assert(
+      kinds.json && kinds.json.count === 6,
+      `six kinds of resource, got ${kinds.json && kinds.json.count}`,
+    );
+    const units = kinds.json.kinds.map((k) => k.unit);
+    assert(
+      new Set(units).size === units.length,
+      `two kinds share a unit, which would make a unit unable to say which kind a number is: ${JSON.stringify(units)}`,
+    );
+    // The rate-like kinds say so, because a price that ignored the clock for them would be selling
+    // something other than what it delivers.
+    const rates = kinds.json.kinds.filter((k) => k.rate_like).map((k) => k.kind);
+    assert(
+      rates.length === 2 && rates.includes('memory') && rates.includes('storage'),
+      `memory and storage are the kinds held over time, got ${JSON.stringify(rates)}`,
+    );
+    assert(
+      String(kinds.json.quota_is_not_an_amount).includes('no conversion'),
+      'the answer must say that a quota and an amount are different things with no bridge',
+    );
+
+    // D-02: the refusal is something a caller can QUERY, which a document is not.
+    const refused = await api('POST', '/plugins/com.twinsearth.sys.resource/call', {
+      capability: 'plugin:lifecycle:read',
+      op: 'refused',
+    });
+    assert(
+      refused.json && refused.json.count === 10,
+      `ten named refusals, got ${refused.json && refused.json.count}`,
+    );
+    const names = refused.json.refused.map((r) => r.name);
+    for (const expected of ['ERC-8004', 'x402', 'L402', 'USDC']) {
+      assert(
+        names.includes(expected),
+        `\`${expected}\` has zero hits in this repository and must be refused by name: ${JSON.stringify(names)}`,
+      );
+    }
+    for (const entry of refused.json.refused) {
+      assert(
+        typeof entry.why === 'string' && entry.why.length > 20,
+        `\`${entry.name}\` is refused with a reason too short to be one: ${entry.why}`,
+      );
+    }
+
+    return `6 kinds with 6 distinct units, and ${names.length} capabilities refused by name`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

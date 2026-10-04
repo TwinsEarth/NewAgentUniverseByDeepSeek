@@ -39,6 +39,7 @@ pub mod net_dht;
 pub mod net_gossip;
 pub mod orchestrator;
 pub mod policy;
+pub mod resource;
 pub mod sandbox;
 pub mod security;
 pub mod storage;
