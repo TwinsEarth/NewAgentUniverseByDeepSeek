@@ -1495,6 +1495,123 @@ async function main() {
     return `raised by measurement, a half-truth at neutral, and no call that takes a score`;
   });
 
+  // D-10's three criteria. The first is attacked from the angle that matters: a provider that
+  // arrives having declared its own perfection must be admitted on exactly the same terms as one
+  // that declared nothing, because the assessment turns on a figure no provider can set.
+  await check('cold start: a self-declared perfect provider is admitted on the starter cap only', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const assess = (provider, requested_bps) =>
+      resource({
+        capability: 'plugin:lifecycle:read',
+        op: 'cold-start',
+        provider,
+        requested_bps,
+      });
+
+    // Never seen at all: on probation, capped, and admitted to SOMETHING -- a zero cap would be a
+    // market that cannot start.
+    const unseen = await assess('did:nau:aaaabbbbccccdddd', 10_000);
+    assert(
+      unseen.status >= 200 && unseen.status < 300,
+      `cold-start -> HTTP ${unseen.status}: ${unseen.text.slice(0, 220)}`,
+    );
+    assert(unseen.json.full_admission === false, 'an unseen provider is on probation');
+    assert(unseen.json.cap_bps > 0, `the starter cap must be positive, got ${unseen.json.cap_bps}`);
+    assert(unseen.json.cap_bps < 10_000, `and below the full limit, got ${unseen.json.cap_bps}`);
+    assert(unseen.json.past_probation === false);
+    assert(
+      unseen.json.admits_the_request === false,
+      'a full-size task must not be admitted to an unseen provider',
+    );
+    assert(
+      unseen.json.admits_the_request === false && unseen.json.cap_bps > 0,
+      'while a small one would be',
+    );
+
+    // The starter cap admits a SMALL task, so probation is a limit rather than an exclusion.
+    const small = await assess('did:nau:aaaabbbbccccdddd', 100);
+    assert(
+      small.json.admits_the_request === true,
+      `a task inside the cap must be admitted: cap ${small.json.cap_bps}, requested 100`,
+    );
+
+    // And the criterion, stated by the answer itself.
+    assert(
+      String(unseen.json.cannot_be_self_reported).includes('cannot set'),
+      `the answer must state the criterion: ${unseen.json.cannot_be_self_reported}`,
+    );
+    assert(
+      String(unseen.json.reproducible).includes('no clock'),
+      `and must say why it is reproducible: ${unseen.json.reproducible}`,
+    );
+
+    // The cap WIDENS with observations, and the same history gives the same conclusion.
+    const observed = async (provider, advertised, measured, times) => {
+      for (let i = 0; i < times; i += 1) {
+        const r = await resource({
+          capability: 'plugin:storage:own',
+          op: 'observe',
+          provider,
+          checker: 'did:nau:8899aabbccddeeff',
+          kind: 'cpu',
+          advertised,
+          measured,
+          at: 1,
+        });
+        assert(r.status < 300, `observe -> HTTP ${r.status}: ${r.text.slice(0, 160)}`);
+      }
+    };
+
+    // A DID no earlier check has touched, and that matters: the first version of this check reused
+    // `did:nau:1111222233334444`, which the D-09 check above had already observed 200 times -- so
+    // the provider was past probation before this check began and the cap was 10,000 at "one"
+    // observation. The failure read "the cap must widen with observations: 10000 -> 10000".
+    //
+    // That is the third time in this project a deployment check assumed it ran against fresh state:
+    // the C-06 trust checks, the D-04 tolerant-task count, and now this. A check that depends on
+    // being first is one whose result depends on the order somebody else chose.
+    const rising = 'did:nau:abcdabcdabcdabcd';
+    await observed(rising, 100, 100, 1);
+    const one = await assess(rising, 10_000);
+    await observed(rising, 100, 100, 4);
+    const five = await assess(rising, 10_000);
+    assert(
+      five.json.cap_bps > one.json.cap_bps,
+      `the cap must widen with observations: ${one.json.cap_bps} -> ${five.json.cap_bps}`,
+    );
+
+    // Called twice, same answer: the property that makes an admission checkable.
+    const again = await assess(rising, 10_000);
+    assert(
+      JSON.stringify(again.json) === JSON.stringify(five.json),
+      'the assessment must be pure',
+    );
+
+    // A provider measured many times and found to deliver a TENTH of what it claims is past
+    // probation by count and must still be held to the starter cap -- otherwise the observation
+    // count becomes a way to launder a bad record.
+    // Also its own DID, for the same reason.
+    const dishonest = 'did:nau:efefefefefefefef';
+    await observed(dishonest, 100, 10, 40);
+    const held = await assess(dishonest, 10_000);
+    assert(
+      held.json.past_probation === true,
+      `forty observations is past probation, got ${held.json.observations}`,
+    );
+    assert(
+      held.json.full_admission === false,
+      `and a found-wanting provider must not graduate by being measured often: ${held.json.because}`,
+    );
+    assert(
+      String(held.json.because).includes('found wanting'),
+      `the reason must say so: ${held.json.because}`,
+    );
+
+    return `starter cap for the unseen, widening with observations, and no graduation by frequency`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

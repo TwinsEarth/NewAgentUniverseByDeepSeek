@@ -79,6 +79,7 @@
 #![warn(missing_docs)]
 
 pub mod actor;
+pub mod cold_start;
 pub mod matching;
 pub mod persistence;
 pub mod pricing;
@@ -89,6 +90,7 @@ pub mod sampling;
 pub mod service;
 
 pub use actor::{Actor, Authority};
+pub use cold_start::{ColdStartAssessment, ColdStartPolicy};
 pub use matching::{rank_bids, score_value, MatchOutcome};
 pub use persistence::{
     MarketSnapshot, RestoreDefect, RestoreReport, MARKET_PROTOCOL_KEY, MARKET_STATE_KEY,

@@ -25,9 +25,9 @@
 //! other four releases are expressed in.
 
 use nau_market::{
-    MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand, ResourceKind,
-    ResourceLedger, ResourceObservation, ResourceOffer, ResourceRegistration, ResourceRegistry,
-    SamplingFinding, SamplingPlan, SamplingVerdict, SnapshotAsset,
+    ColdStartPolicy, MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand,
+    ResourceKind, ResourceLedger, ResourceObservation, ResourceOffer, ResourceRegistration,
+    ResourceRegistry, SamplingFinding, SamplingPlan, SamplingVerdict, SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -66,6 +66,8 @@ pub const OPERATIONS: &[&str] = &[
     // D-09: the resource-truthfulness dimension, fed by measurements. A dimension nothing can
     // record is a dimension that stays neutral forever.
     "observe",
+    // D-10: cold start. A probation nothing consults is a probation nobody is on.
+    "cold-start",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -728,6 +730,40 @@ impl SystemPlugin for ResourcePlugin {
                                                 observation, whose fields are what a CHECKER \
                                                 advertised and measured -- there is no call that \
                                                 takes a score from the agent",
+                    }),
+                ))
+            }
+            "cold-start" => {
+                let provider = payload::string_field(&msg.payload, "provider")?;
+                let requested_bps =
+                    payload::optional_u64(&msg.payload, "requested_bps")?.unwrap_or(0);
+                // The policy is the workspace's default, and the observation count comes from the
+                // SAME map `observe` writes to -- so an assessment cannot be made against a
+                // reputation the network did not measure.
+                let policy = ColdStartPolicy::default();
+                let reputation = self.observations.get(provider).cloned().unwrap_or_default();
+                let assessment = policy.assess(&reputation);
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "provider": provider,
+                        "observations": reputation.observations,
+                        "truthfulness_bps": reputation.truthfulness.bps(),
+                        "past_probation": policy.is_past_probation(&reputation),
+                        "full_admission": assessment.full_admission,
+                        "cap_bps": assessment.cap_bps,
+                        "because": assessment.because,
+                        "admits_the_request": assessment.admits(
+                            u16::try_from(requested_bps).unwrap_or(u16::MAX)
+                        ),
+                        "requested_bps": requested_bps,
+                        "cannot_be_self_reported": "the observation count is the only figure a \
+                                                    provider cannot set, and it is what this \
+                                                    assessment turns on",
+                        "reproducible": "a pure function of the policy and the measured reputation: \
+                                         no clock, no draw, no accumulated state, so two nodes \
+                                         holding the same observations reach the same conclusion",
                     }),
                 ))
             }
