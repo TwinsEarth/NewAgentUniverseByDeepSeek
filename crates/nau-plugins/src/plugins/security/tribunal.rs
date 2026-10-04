@@ -46,7 +46,14 @@ use crate::host::{HostContext, LogLevel, PluginGrant, SystemPlugin};
 use crate::payload;
 
 /// The operations this plugin implements.
-pub const OPERATIONS: &[&str] = &["capabilities", "penalties", "rule", "unseal"];
+pub const OPERATIONS: &[&str] = &[
+    "capabilities",
+    "penalties",
+    "rule",
+    "unseal",
+    // E-09: the governance log's view and its replay -- and deliberately not a ballot.
+    "governance",
+];
 
 /// The field names of [`BlacklistEntry`], as this repository defines it.
 pub const BLACKLIST_FIELDS: [&str; 7] = [
@@ -346,6 +353,37 @@ impl SystemPlugin for TribunalPlugin {
                         "entry_shape": serde_json::to_value(&entry_shape).unwrap_or(Value::Null),
                         "note": "approved, not written: the blacklist is the kernel's store and this \
                                  body holds no handle to it",
+                    }),
+                ))
+            }
+            // E-09's third criterion, arriving as an operation that CANNOT execute. This body holds
+            // `kernel:policy:write` and is where a governance decision would be applied -- but there is
+            // no ballot operation here, because a court that could also vote would be one that decides
+            // who sits on it.
+            "governance" => {
+                let log = crate::plugins::security::governance::GovernanceLog::new(1);
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "ballots_recorded": log.len(),
+                        "revision": log.revision(),
+                        "replay": log.replay(),
+                        "this_body_cannot_vote": "there is no ballot operation here: this body \
+                                                  applies a decided policy, and a court that could \
+                                                  also vote would be one that decides who sits on \
+                                                  it -- the same split v3.7.1 made between the \
+                                                  police and this body, one level up",
+                        "votes_cannot_execute": "the governance module tallies and produces a \
+                                                 `PolicyChange`, which is DATA: applying it is this \
+                                                 body's act, and there is no variant of its outcome \
+                                                 meaning `and it is now in force`",
+                        "on_chain_refused": "contracts/src/GovernanceToken.sol exists and is tested, \
+                                             and nothing in crates/ can call it: no JSON-RPC client, \
+                                             no ABI encoder, no EVM address type. A vote here is \
+                                             recorded and replayable, and putting it on-chain is \
+                                             refused for the same reason every other chain write in \
+                                             this family is",
                     }),
                 ))
             }

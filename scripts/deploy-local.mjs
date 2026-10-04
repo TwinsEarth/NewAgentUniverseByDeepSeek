@@ -2366,6 +2366,57 @@ async function main() {
     return `refused before the bounds, and the bridge risk is accepted in a disjoint list`;
   });
 
+  // E-09's third criterion, asserted as a CAPABILITY SPLIT rather than as a comment: the body that
+  // applies a policy has no ballot, and the module that tallies has no way to apply anything.
+  await check('the tribunal can apply a policy and cannot vote, and says so in both directions', async () => {
+    const tribunal = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.security.tribunal/call', body);
+
+    const gov = await tribunal({ capability: 'kernel:policy:write', op: 'governance' });
+    assert(
+      gov.status >= 200 && gov.status < 300,
+      `governance -> HTTP ${gov.status}: ${gov.text.slice(0, 220)}`,
+    );
+    assert(typeof gov.json.revision === 'number', 'the revision must be published');
+    assert(Array.isArray(gov.json.replay), 'and the replay must be a list');
+    // E-09's third criterion, in both directions, asserted from the answer.
+    assert(
+      String(gov.json.this_body_cannot_vote).includes('no ballot operation'),
+      `the body must say it cannot vote: ${gov.json.this_body_cannot_vote}`,
+    );
+    assert(
+      String(gov.json.votes_cannot_execute).includes('DATA'),
+      `and must say a vote is data rather than an act: ${gov.json.votes_cannot_execute}`,
+    );
+    // The split is the same one v3.7.1 made, one level up.
+    assert(
+      String(gov.json.this_body_cannot_vote).includes('v3.7.1'),
+      `and must name the split it extends: ${gov.json.this_body_cannot_vote}`,
+    );
+    assert(
+      String(gov.json.on_chain_refused).includes('GovernanceToken.sol'),
+      `the on-chain half must be refused by name: ${gov.json.on_chain_refused}`,
+    );
+
+    // The capability split, which is what makes the separation a fact rather than a paragraph: this
+    // body holds the policy write and NOT the plugin management, and a ballot is not among the
+    // operations it will accept at all.
+    const unknown = await tribunal({
+      capability: 'kernel:policy:write',
+      op: 'ballot',
+    });
+    assert(
+      unknown.status === 400,
+      `there is no ballot operation, so one must be refused: HTTP ${unknown.status}`,
+    );
+    assert(
+      String(unknown.text).includes('ballot'),
+      `and the refusal must name it: ${unknown.text.slice(0, 200)}`,
+    );
+
+    return `the policy writer has no ballot, the tally has no way to apply, and both say so`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

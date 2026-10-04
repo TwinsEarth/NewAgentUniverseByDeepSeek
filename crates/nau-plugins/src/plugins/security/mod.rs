@@ -39,6 +39,7 @@
 //! exercised yet is still a capability that can be **asked for and refused**.
 
 pub mod audit;
+pub mod governance;
 pub mod police;
 pub mod registry;
 pub mod report;
