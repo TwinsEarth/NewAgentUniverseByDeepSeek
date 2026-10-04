@@ -30,7 +30,7 @@ use crate::host::{HostContext, LogLevel, PluginGrant, SystemPlugin};
 use crate::payload;
 
 /// The operations this plugin implements.
-pub const OPERATIONS: &[&str] = &["capabilities", "authority", "violations"];
+pub const OPERATIONS: &[&str] = &["capabilities", "authority", "violations", "report"];
 
 /// The police system plugin.
 pub struct PolicePlugin {
@@ -132,6 +132,53 @@ impl SystemPlugin for PolicePlugin {
                             authority and refuses to report an observation it did not make",
                 }),
             )),
+            "report" => {
+                // The police **decides**; the host enforces. This operation validates a violation
+                // report and returns it in canonical form, and the route that called it hands the
+                // verdict to `SystemBoot::record_violation`.
+                //
+                // The split is not ceremony. The lifecycles are the host's, so a plugin cannot
+                // change one; and a route that skipped this operation would quarantine any plugin
+                // on request, with this body reduced to decoration.
+                let subject = payload::string_field(&msg.payload, "subject")?;
+                let what = payload::string_field(&msg.payload, "what")?;
+                if what.trim().is_empty() {
+                    return Err(payload::protocol(
+                        "empty_violation",
+                        "a violation must say what happened; a count of unreported violations is \
+                         not something an operator can act on",
+                    ));
+                }
+                // Refused here rather than at the host, so the refusal names the reason a caller
+                // can fix. The host refuses an unknown name too, and that is the check that
+                // matters -- this one is an earlier, more specific answer to the same question.
+                if !subject.starts_with("com.twinsearth.") {
+                    return Err(payload::protocol(
+                        "unknown_subject",
+                        format!(
+                            "`{subject}` is outside this node's plugin namespace; the police acts \
+                             on the plugins this host runs"
+                        ),
+                    ));
+                }
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        // Echoed rather than re-derived, so the host applies exactly what was
+                        // accepted. The route reads these two fields and does not re-parse the
+                        // request, which would be a second parse that could disagree.
+                        "subject": subject,
+                        "what": what,
+                        "accepted": true,
+                        "enforced_by": "the host, through Lifecycle::violation and the one \
+                                        transition table",
+                        // The police does not say what the punishment is: that is the kernel's
+                        // threshold, and a second opinion here would be a second rule.
+                        "threshold": nau_plugin::lifecycle::VIOLATION_THRESHOLD,
+                    }),
+                ))
+            }
             other => Err(payload::unknown_operation(Self::ID, other, OPERATIONS)),
         }
     }

@@ -376,6 +376,78 @@ async function main() {
     return `${seen.length} bodies booted with the expected authorities: ${seen.join(', ')}`;
   });
 
+  // C-03's enforcement, end to end in the running node.
+  //
+  // Two violations must leave the plugin running and the third must quarantine it, and the count
+  // is asserted at each step because "it quarantined" alone would also be true of a rule that
+  // quarantined on the first.
+  //
+  // The victim is `security.tribunal`, chosen because **no check after this one calls it**. A
+  // quarantine is not undoable -- `Quarantined` is terminal in this repository -- so a check that
+  // quarantined a plugin a later check needed would break the suite in a way that looked like the
+  // later check's fault.
+  await check('a plugin is quarantined on the third violation, not before', async () => {
+    const victim = 'com.twinsearth.sys.security.tribunal';
+    const threshold = 3;
+    // Read through the list endpoint: there is no `GET /plugins/<id>` route, and adding one for a
+    // check would be a route the node has for no reason but the test. `stateOf` below reads the
+    // same list, so the before and after readings cannot disagree about where they looked.
+    const stateOf = async (id) => {
+      const r = await api('GET', '/plugins');
+      assert(r.status === 200, `cannot list plugins: HTTP ${r.status}`);
+      const entry = (r.json.plugins || []).find((p) => p.id === id);
+      assert(entry, `${id} is not in the node's plugin list`);
+      return entry.state;
+    };
+    const before = await stateOf(victim);
+    assert(
+      before === 'running',
+      `${victim} should start running, it is ${before}`,
+    );
+
+    const reported = [];
+    for (let n = 1; n < threshold; n++) {
+      const r = await api('POST', '/plugins/com.twinsearth.sys.security.police/report', {
+        subject: victim,
+        what: `deployment check violation ${n}`,
+      });
+      assert(
+        r.status >= 200 && r.status < 300,
+        `report ${n} -> HTTP ${r.status}: ${r.text.slice(0, 200)}`,
+      );
+      assert(
+        r.json && r.json.violations === n,
+        `report ${n} should record ${n} violation(s), the node says ${r.json && r.json.violations}`,
+      );
+      assert(
+        r.json.state === 'running',
+        `violation ${n} of ${threshold} must not quarantine on its own, state is ${r.json.state}`,
+      );
+      reported.push(n);
+    }
+
+    const last = await api('POST', '/plugins/com.twinsearth.sys.security.police/report', {
+      subject: victim,
+      what: 'the violation that quarantines',
+    });
+    assert(
+      last.status >= 200 && last.status < 300,
+      `the third report -> HTTP ${last.status}: ${last.text.slice(0, 200)}`,
+    );
+    assert(
+      last.json && last.json.state === 'quarantined',
+      `the ${threshold}rd violation must quarantine ${victim}, state is ${last.json && last.json.state}`,
+    );
+
+    // And the node agrees, read back rather than taken from the report's own answer.
+    const after = await stateOf(victim);
+    assert(
+      after === 'quarantined',
+      `${victim} reports ${after} after the third violation`,
+    );
+    return `${threshold} violations -> quarantined, with ${reported.length} tolerated first`;
+  });
+
   await check('the AUSec plugin answers in the running node', async () => {
     const r = await api('POST', '/plugins/com.twinsearth.sys.ausec/call', {
       capability: 'sandbox:create',

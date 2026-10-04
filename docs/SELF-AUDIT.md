@@ -155,5 +155,5 @@
 | `cargo +1.85.0 metadata --locked` | **exit 0** |
 
 其余关卡（`cargo test --workspace`、clippy、fmt、`forge test`、Python/JS SDK、浏览器客户端 e2e、
-`deploy-local.mjs` 的 32 项部署检查）由 `scripts/verify-all.mjs` 统一执行，
+`deploy-local.mjs` 的 33 项部署检查）由 `scripts/verify-all.mjs` 统一执行，
 其结果记录在发布说明与 CI 中，而非本文——**本文只记录由自审本身产生的新发现**。

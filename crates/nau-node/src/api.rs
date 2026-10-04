@@ -878,6 +878,89 @@ fn dispatch(
             }
         }
 
+        // `POST /plugins/com.twinsearth.sys.security.police/report` — C-03's enforcement point.
+        //
+        // # Why this route is two calls and one answer
+        //
+        // C-03 splits the act in two, deliberately: the **police decides** whether a report is
+        // well-formed and against whom, and the **host enforces**, because the lifecycles are the
+        // host's. A route that only called the plugin would return a verdict nothing acted on --
+        // the "written but not wired" shape -- and a route that only called `record_violation`
+        // would be an unguarded way to quarantine any plugin, with the police body reduced to
+        // decoration.
+        //
+        // So one request does both, in that order, and the second half runs **only if the first
+        // accepted**. A refused report changes nothing.
+        ["plugins", "com.twinsearth.sys.security.police", "report"] => {
+            if method != "POST" {
+                return Response::method_not_allowed(&["POST"]);
+            }
+            let Some(body) = body else {
+                return Response::error(400, "a violation report needs a JSON body");
+            };
+            for field in ["subject", "what"] {
+                if body.get(field).and_then(Value::as_str).is_none() {
+                    return Response::error(
+                        400,
+                        format!(
+                            "a violation report must name `{field}`; a report that does not say \
+                             who and what is one the host cannot act on"
+                        ),
+                    );
+                }
+            }
+
+            // 1. the police decides.
+            //
+            // The op is set **here**, not taken from the body. This is the report route, and a
+            // caller that could name the operation would be able to make it call any of the
+            // police's operations — including ones that do not report anything, whose answers this
+            // route would then hand to `record_violation` as though they were verdicts.
+            let mut payload = body.clone();
+            if let Some(object) = payload.as_object_mut() {
+                let _ = object.remove("capability");
+                let _ = object.insert("op".to_string(), Value::String("report".to_string()));
+            }
+            let verdict = node.plugins_mut().call(
+                "com.twinsearth.sys.security.police",
+                // The police's own authority, because deciding that a plugin has violated is
+                // acting on that plugin. Sending a weaker capability would be refused by the
+                // plugin -- correctly, and that refusal is what this line responds to rather than
+                // works around.
+                "kernel:plugin:manage",
+                payload,
+                now,
+            );
+            let verdict = match verdict {
+                Ok(v) => v,
+                Err(refusal) => return Response::error(400, refusal),
+            };
+
+            // 2. and the host enforces, through `Lifecycle::violation` and the one transition
+            //    table. The violation body is read from the **verdict** rather than from the
+            //    request: the plugin has by now validated it, and re-reading the caller's copy
+            //    would be a second parse that could disagree with the first.
+            let subject = verdict
+                .get("subject")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let what = verdict
+                .get("what")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match node.plugins_mut().record_violation(subject, what, now) {
+                Ok(state) => Response::ok(json!({
+                    "subject": subject,
+                    "what": what,
+                    "accepted_by": "com.twinsearth.sys.security.police",
+                    "state": state.label(),
+                    "violations": node.plugins().violations(subject),
+                    "threshold": nau_plugin::lifecycle::VIOLATION_THRESHOLD,
+                })),
+                Err(refusal) => Response::error(400, refusal.to_string()),
+            }
+        }
+
         // ------------------------------------------------------ the bus (PMB)
         //
         // The internal messaging protocol's **external** interface. Until this route existed

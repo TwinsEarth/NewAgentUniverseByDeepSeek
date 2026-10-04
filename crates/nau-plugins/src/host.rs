@@ -720,6 +720,46 @@ impl SystemPluginHost {
         self.entries.get(name).map(|entry| entry.lifecycle.state())
     }
 
+    /// Record a violation against a plugin, and quarantine it on the third.
+    ///
+    /// # Why this lives here and not in a plugin
+    ///
+    /// C-03 has the police observe behaviour and move a plugin out of service. The move is
+    /// [`Lifecycle::violation`], and the lifecycle it must act on is **this host's**: the
+    /// [`Lifecycle`](nau_plugin::lifecycle::Lifecycle) the lifecycle *plugin* holds is a scratch
+    /// instance used to answer enquiries about the state machine, and its own documentation says
+    /// so — "it is an enquiry, not an audit record". Recording a violation there would increment a
+    /// counter on a value that is discarded, which would look like policing and quarantine nobody.
+    ///
+    /// So the police's report arrives here, where the real lifecycles are, and it is applied
+    /// through [`Lifecycle::violation`] — which is itself the only path to `Quarantined` on the
+    /// threshold, and which reaches the state by calling [`Lifecycle::transition`], the one
+    /// function that assigns a state. No second rule about how many violations matter is written
+    /// here; [`VIOLATION_THRESHOLD`](nau_plugin::lifecycle::VIOLATION_THRESHOLD) is the kernel's.
+    ///
+    /// # Errors
+    ///
+    /// [`nau_plugin::PluginError::Lifecycle`] when `name` is not a registered plugin — refused
+    /// rather than ignored, because a report against a name nobody recognises is either a typo or
+    /// an attempt to act on something outside this host, and both want an answer.
+    pub fn record_violation(&mut self, name: &str, what: &str, at: u64) -> Result<PluginState> {
+        let entry = self.entries.get_mut(name).ok_or_else(|| {
+            PluginError::Lifecycle(format!(
+                "no plugin named `{name}` is registered, so a violation against it cannot be \
+                 recorded"
+            ))
+        })?;
+        entry.lifecycle.violation(what, at)
+    }
+
+    /// How many violations a registered plugin has accumulated.
+    #[must_use]
+    pub fn violations(&self, name: &str) -> Option<u32> {
+        self.entries
+            .get(name)
+            .map(|entry| entry.lifecycle.violations())
+    }
+
     /// How many bus messages a registered plugin has queued and not yet sent.
     ///
     /// # Why this is exposed rather than left internal

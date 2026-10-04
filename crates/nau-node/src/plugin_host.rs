@@ -77,6 +77,30 @@ impl SystemBoot {
         self.host.state(name)
     }
 
+    /// Record a violation against a plugin, quarantining it on the third.
+    ///
+    /// C-03's behaviour, reached from where the police can reach it. The police observes and
+    /// reports; **this** is where the report becomes a state change, because the lifecycles are
+    /// here. See [`SystemPluginHost::record_violation`] for why a plugin cannot do it itself.
+    ///
+    /// # Errors
+    ///
+    /// [`nau_plugin::PluginError::Lifecycle`] when `name` is not a registered plugin.
+    pub fn record_violation(
+        &mut self,
+        name: &str,
+        what: &str,
+        at: u64,
+    ) -> Result<PluginState, nau_plugin::PluginError> {
+        self.host.record_violation(name, what, at)
+    }
+
+    /// How many violations a plugin has accumulated.
+    #[must_use]
+    pub fn violations(&self, name: &str) -> Option<u32> {
+        self.host.violations(name)
+    }
+
     /// Carry the bus messages a plugin queued, delivering each or reporting why not.
     ///
     /// The host answers "which plugins are running?" itself (the kernel's `BusMembership`),
@@ -437,6 +461,68 @@ mod tests {
     /// `HotPlug::stop_plan` had **no caller anywhere in the repository**. A shutdown that runs
     /// but leaves plugins in `Running` would look identical from outside, so the assertion is on
     /// the state rather than on the function having returned.
+    #[test]
+    fn the_third_violation_quarantines_a_plugin_through_the_one_transition_table() {
+        // C-03's first two criteria, end to end: the count accumulates, the third violation
+        // quarantines, and the state is reached by `Lifecycle::transition` -- the one function
+        // that assigns a state. If a second path to `Quarantined` existed, this test would still
+        // pass and the history below would not have the transition in it, which is why the
+        // history is checked and not only the state.
+        let dir = temp_dir("violation");
+        let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");
+        let victim = "com.twinsearth.sys.security.police";
+        assert_eq!(boot.state(victim), Some(PluginState::Running));
+
+        // The threshold is the kernel's, not a number chosen here.
+        let threshold = nau_plugin::lifecycle::VIOLATION_THRESHOLD;
+        assert_eq!(threshold, 3);
+
+        for n in 1..threshold {
+            let state = boot
+                .record_violation(victim, &format!("violation {n}"), NOW + u64::from(n))
+                .expect("recorded");
+            assert_eq!(
+                state,
+                PluginState::Running,
+                "violation {n} of {threshold} must not quarantine on its own"
+            );
+            assert_eq!(boot.violations(victim), Some(n));
+        }
+
+        let state = boot
+            .record_violation(victim, "the last one", NOW + 100)
+            .expect("recorded");
+        assert_eq!(
+            state,
+            PluginState::Quarantined,
+            "the {threshold}th violation must quarantine"
+        );
+        assert_eq!(boot.violations(victim), Some(threshold));
+
+        // And it got there by the edge, recorded in the history rather than assigned directly.
+        let history = boot.host.history(victim).expect("a history");
+        let last = history.last().expect("at least one transition");
+        assert_eq!(last.to, PluginState::Quarantined);
+        assert!(
+            last.because.contains("violations"),
+            "the transition must say why, got: {}",
+            last.because
+        );
+    }
+
+    #[test]
+    fn a_violation_against_an_unknown_plugin_is_refused() {
+        // A report against a name nobody recognises is either a typo or an attempt to act on
+        // something outside this host, and both want an answer rather than a silent no-op.
+        let dir = temp_dir("violation-unknown");
+        let mut boot = boot_system_plugins(&dir, NOW, empty_books()).expect("boot");
+        let err = boot
+            .record_violation("com.example.not.here", "whatever", NOW)
+            .expect_err("must refuse");
+        assert!(format!("{err}").contains("no plugin named"), "got: {err}");
+        assert_eq!(boot.violations("com.example.not.here"), None);
+    }
+
     #[test]
     fn every_plugin_stops_and_a_stopped_plugin_does_not_answer() {
         let dir = temp_dir("shutdown");
