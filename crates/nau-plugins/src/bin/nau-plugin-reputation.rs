@@ -647,8 +647,13 @@ mod tests {
             speed: ReputationScore::clamped(6_000),
             honesty: ReputationScore::clamped(7_000),
             availability: ReputationScore::clamped(9_000),
+            // D-09's fifth dimension. Set to a value that is neither the default nor any of the four
+            // above, so that a plugin which dropped it would produce a different composite and this
+            // fixture would catch that rather than agreeing by coincidence.
+            truthfulness: ReputationScore::clamped(5_500),
             settled: 7,
             faults: 2,
+            observations: 3,
         }
     }
 

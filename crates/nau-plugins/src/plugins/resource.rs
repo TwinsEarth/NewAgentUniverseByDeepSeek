@@ -26,8 +26,8 @@
 
 use nau_market::{
     MarketConfig, Price, PricingInput, ResourceAmount, ResourceDemand, ResourceKind,
-    ResourceLedger, ResourceOffer, ResourceRegistration, ResourceRegistry, SamplingFinding,
-    SamplingPlan, SamplingVerdict, SnapshotAsset,
+    ResourceLedger, ResourceObservation, ResourceOffer, ResourceRegistration, ResourceRegistry,
+    SamplingFinding, SamplingPlan, SamplingVerdict, SnapshotAsset,
 };
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
@@ -63,6 +63,9 @@ pub const OPERATIONS: &[&str] = &[
     // D-08: the sample and the claim a fault produces. A sampler nothing calls is oversight that
     // never happens.
     "sample",
+    // D-09: the resource-truthfulness dimension, fed by measurements. A dimension nothing can
+    // record is a dimension that stays neutral forever.
+    "observe",
 ];
 
 /// Things this workspace does not have, and therefore cannot trade against.
@@ -112,6 +115,11 @@ pub struct ResourcePlugin {
     /// The rules inside it are the market's, read from its configuration rather than restated here:
     /// a second number meaning "how much must be locked" is a second number to keep in step.
     registry: ResourceRegistry,
+    /// What the network has MEASURED about each provider's resources.
+    ///
+    /// D-09's first criterion lives here: the only way in is an observation, so there is no call
+    /// that lets a provider set its own score.
+    observations: std::collections::BTreeMap<String, nau_market::Reputation>,
     /// Six kinds, six books.
     ///
     /// Separate state from the registry and from the money ledger, which is D-07's third
@@ -152,6 +160,7 @@ impl ResourcePlugin {
             grant: PluginGrant::new(),
             // The rules are the market's, read from its configuration rather than restated here.
             registry: ResourceRegistry::from_config(&MarketConfig::default()),
+            observations: std::collections::BTreeMap::new(),
             resources: ResourceLedger::new(),
         })
     }
@@ -188,10 +197,10 @@ impl SystemPlugin for ResourcePlugin {
         // be claiming authority the operation does not exercise.
         let needed = match op {
             // Everything that writes state this body owns. D-07's `issue` and `consume` were added
-            // to the list after the deployment check caught them missing: a capability model that
-            // silently let a write through under a read would be one whose matrix describes
-            // something other than what the code does.
-            "register" | "slash" | "issue" | "consume" => Capability::StorageOwn,
+            // to the list after the deployment check caught them missing, and D-09's `observe` from
+            // the start: a capability model that silently let a write through under a read would be
+            // one whose matrix describes something other than what the code does.
+            "register" | "slash" | "issue" | "consume" | "observe" => Capability::StorageOwn,
             _ => Capability::LifecycleRead,
         };
         self.grant.require_operation(declared, needed)?;
@@ -670,6 +679,55 @@ impl SystemPlugin for ResourcePlugin {
                                               SIGNATURE, which this body does not hold; the claim \
                                               is produced and the caller files it through the \
                                               market's existing `open_dispute`",
+                    }),
+                ))
+            }
+            "observe" => {
+                let provider = payload::string_field(&msg.payload, "provider")?;
+                let checker = payload::string_field(&msg.payload, "checker")?;
+                let kind_label = payload::string_field(&msg.payload, "kind")?;
+                let kind = ResourceKind::ALL
+                    .into_iter()
+                    .find(|k| k.label() == kind_label)
+                    .ok_or_else(|| {
+                        payload::protocol(
+                            "unknown_kind",
+                            format!(
+                                "`{kind_label}` is not one of the six kinds: {}",
+                                ResourceKind::ALL
+                                    .iter()
+                                    .map(|k| k.label())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        )
+                    })?;
+                let advertised = payload::optional_u64(&msg.payload, "advertised")?.unwrap_or(0);
+                let measured = payload::optional_u64(&msg.payload, "measured")?.unwrap_or(0);
+                let at = payload::optional_u64(&msg.payload, "at")?.unwrap_or(0);
+                let observation = ResourceObservation::new(checker, kind, advertised, measured, at)
+                    .map_err(|e| payload::protocol("invalid_observation", e))?;
+                let entry = self.observations.entry(provider.to_string()).or_default();
+                entry.record_resource_observation(&observation);
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "provider": provider,
+                        "kind": kind.label(),
+                        "advertised": advertised,
+                        "measured": measured,
+                        "ratio_bps": observation.ratio_bps(),
+                        "truthfulness_bps": entry.truthfulness.bps(),
+                        "observations": entry.observations,
+                        "overall_bps": entry.overall_bps(),
+                        "observed": entry.resources_have_been_observed(),
+                        // Stated rather than implied, because it IS the criterion: there is no
+                        // operation here that takes a score from the provider.
+                        "cannot_self_report": "the only way this dimension moves is through an \
+                                                observation, whose fields are what a CHECKER \
+                                                advertised and measured -- there is no call that \
+                                                takes a score from the agent",
                     }),
                 ))
             }

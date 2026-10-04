@@ -1349,6 +1349,152 @@ async function main() {
     return `reproducible from the seed, a different seed differs, and unpredictability NOT claimed`;
   });
 
+  // D-09's first criterion, attacked: a reputation must not be self-reportable.
+  //
+  // There is no operation that takes a score from the provider. The only one that moves the
+  // dimension takes an OBSERVATION, whose fields are what a checker advertised and measured -- so
+  // the check asserts both that a claim moves it and that the shape of the call makes a
+  // self-reported score impossible.
+  await check('a resource reputation moves only through a measurement, never a self-report', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const observe = (advertised, measured) =>
+      resource({
+        capability: 'plugin:storage:own',
+        op: 'observe',
+        provider: 'did:nau:0011223344556677',
+        checker: 'did:nau:8899aabbccddeeff',
+        kind: 'cpu',
+        advertised,
+        measured,
+        at: 1,
+      });
+
+    // Exactly what was advertised: the ratio is the whole, and the dimension converges upward.
+    const honest = await observe(100, 100);
+    assert(
+      honest.status >= 200 && honest.status < 300,
+      `observe -> HTTP ${honest.status}: ${honest.text.slice(0, 220)}`,
+    );
+    assert(honest.json.ratio_bps === 10_000, `ratio ${honest.json.ratio_bps}`);
+    const before = honest.json.truthfulness_bps;
+    for (let i = 0; i < 40; i += 1) await observe(100, 100);
+    const after = (await observe(100, 100)).json;
+    assert(
+      after.truthfulness_bps > before,
+      `matching measurements must raise it: ${before} -> ${after.truthfulness_bps}`,
+    );
+    assert(after.observed === true, 'and the type must say it has been observed');
+    assert(after.observations >= 41, `observations counted: ${after.observations}`);
+
+    // A half-truth sits AT NEUTRAL rather than below it, which is the design: `measured/advertised`
+    // of 50% is 5,000 bps, and 5,000 is neutral. An agent that delivers half of what it claims is
+    // not a known liar -- it is an agent whose claim is half-true.
+    const half = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:1111222233334444',
+      checker: 'did:nau:8899aabbccddeeff',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 50,
+      at: 1,
+    });
+    assert(half.json.ratio_bps === 5_000, `half-truth ratio ${half.json.ratio_bps}`);
+    for (let i = 0; i < 200; i += 1) {
+      await resource({
+        capability: 'plugin:storage:own',
+        op: 'observe',
+        provider: 'did:nau:1111222233334444',
+        checker: 'did:nau:8899aabbccddeeff',
+        kind: 'cpu',
+        advertised: 100,
+        measured: 50,
+        at: 1,
+      });
+    }
+    const settled = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:1111222233334444',
+      checker: 'did:nau:8899aabbccddeeff',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 50,
+      at: 1,
+    });
+    assert(
+      settled.json.truthfulness_bps === 5_000,
+      `a half-truth must sit exactly at neutral, got ${settled.json.truthfulness_bps}`,
+    );
+
+    // Over-delivery is not a credit beyond the whole: an agent that delivers more than it advertised
+    // has not proved it is honest about anything.
+    const surplus = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:5555666677778888',
+      checker: 'did:nau:8899aabbccddeeff',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 10_000,
+      at: 1,
+    });
+    assert(
+      surplus.json.ratio_bps === 10_000,
+      `over-delivery must be capped at the whole, got ${surplus.json.ratio_bps}`,
+    );
+
+    // The shape of the call, asserted: it takes an observation and has no parameter for a score.
+    const noScoreParameter = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:0011223344556677',
+      checker: 'did:nau:8899aabbccddeeff',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 100,
+      at: 0, // a zero timestamp, which an observation refuses
+    });
+    assert(
+      noScoreParameter.status === 400,
+      `an observation must carry a real timestamp, got HTTP ${noScoreParameter.status}`,
+    );
+    const answer = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:0011223344556677',
+      checker: 'did:nau:8899aabbccddeeff',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 100,
+      at: 1,
+    });
+    assert(
+      String(answer.json.cannot_self_report).includes('no call that takes a score'),
+      `the answer must state the criterion: ${answer.json.cannot_self_report}`,
+    );
+
+    // An unattributed measurement is one nobody can be asked about.
+    const unattributed = await resource({
+      capability: 'plugin:storage:own',
+      op: 'observe',
+      provider: 'did:nau:0011223344556677',
+      checker: '   ',
+      kind: 'cpu',
+      advertised: 100,
+      measured: 100,
+      at: 1,
+    });
+    assert(
+      unattributed.status === 400,
+      `an observation must name its checker, got HTTP ${unattributed.status}`,
+    );
+
+    return `raised by measurement, a half-truth at neutral, and no call that takes a score`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

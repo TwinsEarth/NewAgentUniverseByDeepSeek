@@ -95,7 +95,7 @@ pub use persistence::{
     MARKET_STATE_SCHEMA, MARKET_VERSION_KEY,
 };
 pub use pricing::{Adjustment, Price, PricingInput};
-pub use reputation::Reputation;
+pub use reputation::{Reputation, ResourceObservation};
 pub use resource::{
     match_demand, settle_restore, LatencyClass, MeteredAmount, RankedOffer, ResourceAmount,
     ResourceBundle, ResourceDemand, ResourceKind, ResourceMatch, ResourceOffer,
