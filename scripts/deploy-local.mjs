@@ -2197,6 +2197,94 @@ async function main() {
     return `x402 and L402 refuse by name; the host-side signing property is held by unit tests`;
   });
 
+  // E-07's three criteria. The second is the one worth reading twice: a list of what goes on-chain,
+  // item by item, WITH what does not -- because a list of exposures alone leaves a reader to assume
+  // everything else is safe, which is a different claim from the one being made.
+  await check('the privacy boundary is itemised, and not doing private payments is an answer', async () => {
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    const privacy = await settlement({ capability: 'plugin:lifecycle:read', op: 'privacy' });
+    assert(
+      privacy.status >= 200 && privacy.status < 300,
+      `privacy -> HTTP ${privacy.status}: ${privacy.text.slice(0, 220)}`,
+    );
+
+    // E-07's first criterion: nothing claims zero-knowledge settlement.
+    assert(
+      privacy.json.private_settlement_available === false,
+      'no private settlement may be reported available',
+    );
+    const reason = String(privacy.json.refused_because);
+    assert(reason.includes('SNARK'), `the refusal must name the noun: ${reason}`);
+    assert(
+      reason.includes('NEGATION'),
+      `and must say the one hit is a negation rather than a feature: ${reason}`,
+    );
+    assert(
+      reason.includes('nau-attest'),
+      `and must name where its count comes from: ${reason}`,
+    );
+
+    // E-07's second criterion: itemised, each with its source.
+    const exposes = privacy.json.exposes;
+    assert(exposes.length === 7, `seven items, got ${exposes.length}`);
+    for (const item of exposes) {
+      assert(typeof item.item === 'string' && item.item.length > 0, JSON.stringify(item));
+      assert(
+        typeof item.source === 'string' && item.source.length > 20,
+        `${item.item} must say where on-chain it comes from: ${JSON.stringify(item)}`,
+      );
+    }
+    // The three the plan names explicitly, and the one a signature-only list would miss.
+    const items = exposes.map((e) => e.item);
+    for (const required of ['amount', 'payer-address', 'time']) {
+      assert(items.includes(required), `${required} must be listed: ${JSON.stringify(items)}`);
+    }
+    const time = exposes.find((e) => e.item === 'time');
+    assert(
+      time.source.includes('by construction'),
+      `time is on-chain because a block has one, not because a field says so: ${time.source}`,
+    );
+    // Six of seven are linkable, and the digest is the exception.
+    assert(
+      exposes.filter((e) => e.linkable).length === 6,
+      JSON.stringify(exposes.map((e) => [e.item, e.linkable])),
+    );
+    assert(
+      exposes.find((e) => e.item === 'deliverable-digest').linkable === false,
+      'a digest is a commitment rather than an identity',
+    );
+
+    // The other half of the boundary.
+    assert(
+      Array.isArray(privacy.json.withholds) && privacy.json.withholds.length >= 4,
+      `what is NOT published must be listed too: ${JSON.stringify(privacy.json.withholds)}`,
+    );
+    assert(
+      privacy.json.counts.exposed === 7 && privacy.json.counts.withheld >= 4,
+      JSON.stringify(privacy.json.counts),
+    );
+
+    // E-07's third criterion: an answer rather than an absence.
+    assert(
+      String(privacy.json.not_an_absence).includes('not a silence'),
+      `the answer must say it is an answer rather than a gap: ${privacy.json.not_an_absence}`,
+    );
+    const lines = privacy.json.explain;
+    assert(lines[0].includes('NOT available'), lines[0]);
+    assert(
+      lines.filter((l) => l.startsWith('exposed:')).length === 7,
+      JSON.stringify(lines),
+    );
+    assert(
+      lines.filter((l) => l.startsWith('withheld:')).length >= 4,
+      JSON.stringify(lines),
+    );
+
+    return `7 exposures each with a source, 4 withholdings, and "not available" as a queryable answer`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;

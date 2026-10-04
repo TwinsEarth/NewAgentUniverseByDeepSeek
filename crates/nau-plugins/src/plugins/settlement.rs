@@ -50,6 +50,8 @@ pub const OPERATIONS: &[&str] = &[
     "nouns",
     // E-03: the Bitcoin vocabulary, and the platform question.
     "bitcoin",
+    // E-07: what a settlement makes public, item by item.
+    "privacy",
 ];
 
 /// How a rail is provided, or why it is not.
@@ -367,6 +369,233 @@ impl BitcoinCapability {
     #[must_use]
     pub fn is_platform_dependent(self) -> bool {
         matches!(self, BitcoinCapability::NodeRun)
+    }
+}
+
+/// One thing a settlement would put on a public chain.
+///
+/// # E-07's second criterion, itemised
+///
+/// "Declare **what will be exposed on-chain** (amount, address, time), listed item by item."
+///
+/// A prose sentence saying "settlement is public" is one a reader can agree with and cannot act on.
+/// This is the same claim as a **list of named items**, each saying **where it comes from** — so a
+/// party deciding whether to use this rail can see exactly which of its facts would become visible.
+///
+/// The items are drawn from `contracts/src/Settlement.sol`'s own events rather than from the design
+/// prose, because the events are what actually goes on-chain:
+/// `TaskCreated(taskId, requester, budget, ...)`, `TaskSettled(taskId, executor, reward)`,
+/// `TaskDisputed(taskId, by, against)`. A list assembled from the design would be a list of what
+/// somebody intended to publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Exposure {
+    /// How much moved. `TaskSettled`'s `reward` and `TaskCreated`'s `budget`.
+    Amount,
+    /// The paying party's address. `TaskCreated`'s `requester`.
+    PayerAddress,
+    /// The paid party's address. `TaskSettled`'s indexed `executor`.
+    PayeeAddress,
+    /// The task's identifier, which links a settlement to everything else said about that task.
+    TaskId,
+    /// When it happened. Not an event field, and on-chain **by construction**: a block has a
+    /// timestamp and an event has a block. This is the item a list assembled from event signatures
+    /// alone would miss, and it is the one that makes the other items linkable over time.
+    Time,
+    /// Who disputed whom. `TaskDisputed`'s indexed `by` and `against`.
+    DisputeParties,
+    /// The digest of the result, if one is anchored. A digest is not the result, and it is a
+    /// commitment to it: the same digest from two parties proves they hold the same bytes.
+    DeliverableDigest,
+}
+
+impl Exposure {
+    /// Every item.
+    pub const ALL: [Exposure; 7] = [
+        Exposure::Amount,
+        Exposure::PayerAddress,
+        Exposure::PayeeAddress,
+        Exposure::TaskId,
+        Exposure::Time,
+        Exposure::DisputeParties,
+        Exposure::DeliverableDigest,
+    ];
+
+    /// A stable label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Exposure::Amount => "amount",
+            Exposure::PayerAddress => "payer-address",
+            Exposure::PayeeAddress => "payee-address",
+            Exposure::TaskId => "task-id",
+            Exposure::Time => "time",
+            Exposure::DisputeParties => "dispute-parties",
+            Exposure::DeliverableDigest => "deliverable-digest",
+        }
+    }
+
+    /// Where on-chain this comes from.
+    #[must_use]
+    pub fn source(self) -> &'static str {
+        match self {
+            Exposure::Amount => "contracts/src/Settlement.sol: TaskSettled's `reward`",
+            Exposure::PayerAddress => "contracts/src/Settlement.sol: TaskCreated's `requester`",
+            Exposure::PayeeAddress => {
+                "contracts/src/Settlement.sol: TaskSettled's indexed `executor`"
+            }
+            Exposure::TaskId => "contracts/src/Settlement.sol: every event's indexed `taskId`",
+            Exposure::Time => {
+                "by construction: a block has a timestamp and an event has a block, \
+                               so no event signature mentions it and every one carries it"
+            }
+            Exposure::DisputeParties => {
+                "contracts/src/Settlement.sol: TaskDisputed's `by` and \
+                                         `against`"
+            }
+            Exposure::DeliverableDigest => {
+                "an anchor, where one is filed: a commitment to the \
+                                            result rather than the result"
+            }
+        }
+    }
+
+    /// Whether an observer can link two settlements by this item.
+    ///
+    /// The distinction that turns a list of disclosures into a privacy statement: an amount alone
+    /// says how much; an amount with a time and an address says **who, when and how much**, and a
+    /// sequence of them says what that party has been doing. Every item here is linkable except the
+    /// digest, which is a commitment and not an identity.
+    #[must_use]
+    pub fn is_linkable(self) -> bool {
+        !matches!(self, Exposure::DeliverableDigest)
+    }
+}
+
+/// Whether private settlement is provided here.
+///
+/// # E-07's first and third criteria, and there is no third variant
+///
+/// The first: `SNARK` appears **once** in this repository's Rust code, and **that one appearance is a
+/// negation** — `nau-attest`'s commitment module says "There is no SNARK, no STARK, no PCP". So
+/// nothing here may claim zero-knowledge settlement, and this module does not.
+///
+/// The third: "**not doing private payments** is also an explicit, checkable option." That is the
+/// strongest form of the same trick every refusal in this family uses: the answer is `Refused` with a
+/// reason, **not a silence** — a caller asks and gets told, rather than inferring it from the absence
+/// of a feature.
+///
+/// Note that the plan's premise **still holds** here, unlike E-02's, E-03's and E-05's: the count is
+/// one and it says there is none. That is worth recording, because three consecutive releases needed
+/// the same correction and a reader should not assume a fourth does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacySupport {
+    /// It exists, and here is what provides it.
+    Available {
+        /// What provides it.
+        via: &'static str,
+    },
+    /// It does not, and here is what is missing.
+    Refused {
+        /// Why not.
+        reason: &'static str,
+    },
+}
+
+impl PrivacySupport {
+    /// What this node provides.
+    #[must_use]
+    pub fn current() -> Self {
+        PrivacySupport::Refused {
+            reason: "nothing here implements zero-knowledge or confidential settlement: `SNARK` \
+                     appears once in this repository's Rust and that appearance is a NEGATION \
+                     (`nau-attest`: \"There is no SNARK, no STARK, no PCP\"). Every settlement this \
+                     node can perform is public in the items listed below, and saying so is the \
+                     deliverable -- the alternative would be a document implying confidentiality \
+                     that no code provides.",
+        }
+    }
+
+    /// Whether private settlement is available.
+    #[must_use]
+    pub fn is_available(self) -> bool {
+        matches!(self, PrivacySupport::Available { .. })
+    }
+
+    /// The reason it is not, if it is not.
+    #[must_use]
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            PrivacySupport::Available { .. } => None,
+            PrivacySupport::Refused { reason } => Some(reason),
+        }
+    }
+}
+
+/// The privacy boundary: what a settlement makes visible, and what it does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivacyBoundary {
+    /// Whether private settlement exists.
+    pub support: PrivacySupport,
+    /// What would be public, item by item.
+    pub exposes: Vec<Exposure>,
+    /// What does **not** go on-chain, item by item.
+    ///
+    /// The other half of the boundary, and the one a document about privacy usually omits: a list of
+    /// exposures alone leaves a reader to assume that everything else is safe, which is a different
+    /// claim from the one being made.
+    pub withholds: Vec<&'static str>,
+}
+
+impl PrivacyBoundary {
+    /// The boundary as it stands.
+    #[must_use]
+    pub fn current() -> Self {
+        Self {
+            support: PrivacySupport::current(),
+            exposes: Exposure::ALL.to_vec(),
+            withholds: vec![
+                "the task's content: what was asked for is in the task, not in the settlement",
+                "the result itself: only a digest is anchored, where one is filed",
+                "the parties' DIDs: the chain sees addresses, and the binding from an address to a \
+                 DID is a separate act (E-05's anchor, which this node also cannot perform)",
+                "anything about a party's other settlements: the chain sees transactions, and \
+                 linking them is a reading of the chain rather than a field in it",
+            ],
+        }
+    }
+
+    /// How many items are disclosed and how many withheld.
+    #[must_use]
+    pub fn counts(&self) -> (usize, usize) {
+        (self.exposes.len(), self.withholds.len())
+    }
+
+    /// One line per exposure, then one per withholding.
+    #[must_use]
+    pub fn explain(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "private settlement: {}",
+            match self.support {
+                PrivacySupport::Available { via } => format!("available via {via}"),
+                PrivacySupport::Refused { .. } => "NOT available".to_string(),
+            }
+        )];
+        for exposure in &self.exposes {
+            out.push(format!(
+                "exposed: {} ({}){}",
+                exposure.label(),
+                exposure.source(),
+                if exposure.is_linkable() {
+                    " -- linkable"
+                } else {
+                    " -- a commitment, not an identity"
+                }
+            ));
+        }
+        for withheld in &self.withholds {
+            out.push(format!("withheld: {withheld}"));
+        }
+        out
     }
 }
 
@@ -718,6 +947,30 @@ impl SystemPlugin for SettlementPlugin {
                                                      CONCLUSION survives -- none may be claimed as \
                                                      supported -- and every appearance is inside a \
                                                      refusal or an audit of refusals.",
+                    }),
+                ))
+            }
+            // E-07. The boundary, itemised, and the refusal that is the deliverable.
+            "privacy" => {
+                let boundary = PrivacyBoundary::current();
+                let (exposed, withheld) = boundary.counts();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "private_settlement_available": boundary.support.is_available(),
+                        "refused_because": boundary.support.refusal(),
+                        "exposes": boundary.exposes.iter().map(|e| json!({
+                            "item": e.label(),
+                            "source": e.source(),
+                            "linkable": e.is_linkable(),
+                        })).collect::<Vec<_>>(),
+                        "withholds": boundary.withholds,
+                        "counts": { "exposed": exposed, "withheld": withheld },
+                        "explain": boundary.explain(),
+                        "not_an_absence": "not doing private payments is an EXPLICIT answer a caller \
+                                           can query, not a silence to be inferred from a missing \
+                                           feature",
                     }),
                 ))
             }
@@ -1089,6 +1342,109 @@ mod tests {
                 && !available.contains(&"taproot")
                 && !available.contains(&"rgb"),
             "got {available:?}"
+        );
+    }
+    // ---------------------------------------------------------------- E-07
+
+    #[test]
+    fn zero_knowledge_is_not_claimed_and_the_one_hit_is_a_negation() {
+        // E-07's first criterion. `SNARK` appears exactly once in this repository's Rust, and that
+        // one appearance is `nau-attest`'s module saying there is none -- so nothing here may claim
+        // confidential settlement, and the refusal says where its own evidence comes from.
+        let support = PrivacySupport::current();
+        assert!(!support.is_available());
+        let reason = support.refusal().expect("a reason");
+        assert!(reason.contains("SNARK"), "{reason}");
+        assert!(
+            reason.contains("NEGATION"),
+            "and must say that the one hit is a negation rather than a feature: {reason}"
+        );
+        assert!(
+            reason.contains("nau-attest"),
+            "and must name where the count comes from: {reason}"
+        );
+        // The claim is absent from the vocabulary too: no exposure item and no withholding mentions
+        // a proof system as something provided.
+        let boundary = PrivacyBoundary::current();
+        for line in boundary.explain() {
+            assert!(
+                !line.contains("available via"),
+                "no line may report private settlement as available: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_exposure_is_named_and_says_where_on_chain_it_comes_from() {
+        // E-07's second criterion. A prose sentence saying "settlement is public" is one a reader can
+        // agree with and cannot act on; this is the same claim as named items with sources.
+        let boundary = PrivacyBoundary::current();
+        assert_eq!(boundary.exposes.len(), Exposure::ALL.len());
+        for exposure in &boundary.exposes {
+            assert!(!exposure.label().is_empty(), "{exposure:?}");
+            assert!(
+                exposure.source().len() > 20,
+                "{exposure:?} must say where it comes from: {}",
+                exposure.source()
+            );
+        }
+        // The three the plan names explicitly are present.
+        for required in [Exposure::Amount, Exposure::PayerAddress, Exposure::Time] {
+            assert!(
+                boundary.exposes.contains(&required),
+                "{required:?} is named in the plan and must be in the list"
+            );
+        }
+        // TIME is the item a list assembled from event signatures alone would miss, and its source
+        // says so -- it is on-chain by construction rather than by a field.
+        assert!(
+            Exposure::Time.source().contains("by construction"),
+            "{}",
+            Exposure::Time.source()
+        );
+        // Six of the seven are linkable and the digest is not, which is what turns a list of
+        // disclosures into a privacy statement.
+        let linkable = boundary.exposes.iter().filter(|e| e.is_linkable()).count();
+        assert_eq!(
+            linkable, 6,
+            "every item but the digest links settlements to each other"
+        );
+        assert!(!Exposure::DeliverableDigest.is_linkable());
+    }
+
+    #[test]
+    fn not_doing_private_payments_is_an_answer_rather_than_an_absence() {
+        // E-07's third criterion. A silence is something a caller has to interpret; this is something
+        // it can query.
+        let boundary = PrivacyBoundary::current();
+        assert!(!boundary.support.is_available());
+        assert!(
+            boundary.support.refusal().is_some(),
+            "the refusal must be present, not merely the absence of an Available"
+        );
+        // And the boundary states the other half too: what is NOT published. A list of exposures
+        // alone leaves a reader to assume everything else is safe, which is a different claim.
+        assert!(
+            !boundary.withholds.is_empty(),
+            "a privacy boundary that lists only exposures is half a boundary"
+        );
+        for withheld in &boundary.withholds {
+            assert!(withheld.len() > 30, "too short to act on: {withheld}");
+        }
+        let (exposed, withheld) = boundary.counts();
+        assert_eq!(exposed, 7);
+        assert!(withheld >= 4, "got {withheld}");
+
+        // The explanation carries both halves and the headline.
+        let lines = boundary.explain();
+        assert!(lines[0].contains("NOT available"), "{}", lines[0]);
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("exposed:")).count(),
+            exposed
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("withheld:")).count(),
+            withheld
         );
     }
     #[test]
