@@ -24,7 +24,9 @@
 //! settle (D-07). Its one job is to answer **what is a resource here**, which is the vocabulary the
 //! other four releases are expressed in.
 
-use nau_market::{ResourceKind, ResourceOffer};
+use nau_market::{
+    MarketConfig, ResourceKind, ResourceOffer, ResourceRegistration, ResourceRegistry,
+};
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
 use nau_plugin::{PluginId, Result};
@@ -34,7 +36,18 @@ use crate::host::{HostContext, LogLevel, PluginGrant, SystemPlugin};
 use crate::payload;
 
 /// The operations this plugin implements.
-pub const OPERATIONS: &[&str] = &["capabilities", "kinds", "validate", "refused"];
+pub const OPERATIONS: &[&str] = &[
+    "capabilities",
+    "kinds",
+    "validate",
+    "refused",
+    // D-03: the registry, reachable. A registry that existed in the market crate and was reachable
+    // from nowhere would be the "written but not wired" shape this project keeps finding -- D-03's
+    // rules are only real if a caller can be refused by them.
+    "register",
+    "admitted",
+    "slash",
+];
 
 /// Things this workspace does not have, and therefore cannot trade against.
 ///
@@ -78,6 +91,11 @@ pub const REFUSED: [(&str, &str); 10] = [
 pub struct ResourcePlugin {
     id: PluginId,
     grant: PluginGrant,
+    /// Who may offer, and on what terms.
+    ///
+    /// The rules inside it are the market's, read from its configuration rather than restated here:
+    /// a second number meaning "how much must be locked" is a second number to keep in step.
+    registry: ResourceRegistry,
 }
 
 impl ResourcePlugin {
@@ -104,6 +122,8 @@ impl ResourcePlugin {
         Ok(Self {
             id: PluginId::parse(Self::ID)?,
             grant: PluginGrant::new(),
+            // The rules are the market's, read from its configuration rather than restated here.
+            registry: ResourceRegistry::from_config(&MarketConfig::default()),
         })
     }
 }
@@ -133,9 +153,15 @@ impl SystemPlugin for ResourcePlugin {
     fn handle(&mut self, msg: &PmbMessage) -> Result<Value> {
         let declared = self.grant.require_declared(msg)?;
         let op = payload::operation(&msg.payload)?;
-        // Every operation here is a read: this body announces, and announcing changes nothing.
-        self.grant
-            .require_operation(declared, Capability::LifecycleRead)?;
+        // Reads need the read every plugin holds; writing the registry needs the capability for
+        // state a plugin OWNS. It deliberately does not need a kernel capability: the registry is
+        // this body's own book, not policy over other plugins, and requiring `kernel:*` for it would
+        // be claiming authority the operation does not exercise.
+        let needed = match op {
+            "register" | "slash" => Capability::StorageOwn,
+            _ => Capability::LifecycleRead,
+        };
+        self.grant.require_operation(declared, needed)?;
 
         match op {
             "capabilities" => Ok(payload::answer(
@@ -230,6 +256,83 @@ impl SystemPlugin for ResourcePlugin {
                                                   these, and the plugin has to be the thing that \
                                                   says no; a document saying so is one a caller \
                                                   cannot query",
+                    }),
+                ))
+            }
+            "register" => {
+                let registration: ResourceRegistration =
+                    serde_json::from_value(payload::field(&msg.payload, "registration")?.clone())
+                        .map_err(|e| {
+                        payload::protocol(
+                            "malformed_registration",
+                            format!(
+                                "a registration needs a provider, an offer, a stake and a \
+                                     timestamp: {e}"
+                            ),
+                        )
+                    })?;
+                let provider = registration.provider.clone();
+                // The registry refuses a stake below the minimum, and the refusal is carried across
+                // rather than re-worded so the caller reads the number the market is using.
+                self.registry
+                    .register(registration)
+                    .map_err(|e| payload::protocol("below_minimum_stake", e))?;
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "provider": provider,
+                        "admitted": true,
+                        "registered": self.registry.len(),
+                        "min_stake": self.registry.min_stake().to_decimal_string(),
+                        "note": "checked, not moved: the ledger is the market's, and a registry that \
+                                 moved money would be a second book",
+                    }),
+                ))
+            }
+            "admitted" => {
+                let provider = payload::string_field(&msg.payload, "provider")?;
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "provider": provider,
+                        "admitted": self.registry.is_admitted(provider),
+                        "registered": self.registry.len(),
+                        "min_stake": self.registry.min_stake().to_decimal_string(),
+                    }),
+                ))
+            }
+            "slash" => {
+                let provider = payload::string_field(&msg.payload, "provider")?;
+                let bonded_minor =
+                    payload::optional_u64(&msg.payload, "bonded_minor")?.unwrap_or(0);
+                let bonded = nau_core::domain::Money::from_minor(
+                    i64::try_from(bonded_minor).unwrap_or(i64::MAX),
+                );
+                // The caller MAY say what it thinks should be slashed. That number is checked and
+                // then ignored -- see `ResourceRegistry::slash`, which is upstream v2.8.2's
+                // finding F: a caller that could name its own penalty would be sentencing itself.
+                let claimed = payload::optional_u64(&msg.payload, "claimed_minor")?.map(|m| {
+                    nau_core::domain::Money::from_minor(i64::try_from(m).unwrap_or(i64::MAX))
+                });
+                let slashed = self
+                    .registry
+                    .slash(provider, bonded, claimed)
+                    .map_err(|e| payload::protocol("cannot_slash", e))?;
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "provider": provider,
+                        "bonded_minor": bonded.minor(),
+                        "slashed_minor": slashed.minor(),
+                        "decided_by": format!(
+                            "the rule: {} basis points of the balance actually bonded, capped at it",
+                            self.registry.fault_slash_bps()
+                        ),
+                        "claimed_minor": claimed.map(|c| c.minor()),
+                        "claim_decided_it": false,
                     }),
                 ))
             }

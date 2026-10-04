@@ -123,10 +123,38 @@ impl ResourceKind {
 ///
 /// Exact integers, like every other quantity in this workspace: a market that priced in floating
 /// point would have a conservation law that holds until it does not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+///
+/// # Deserialisation goes through `of`, and that is a fix rather than a style
+///
+/// This type derived `Deserialize` for three releases' worth of code and the derive **bypassed
+/// [`ResourceAmount::of`]** — so an amount arriving as JSON could be zero, which is the one value
+/// `of` exists to refuse. The deployment check found it: a registration whose amount was built by
+/// serde rather than by the constructor would have reached a matcher as an offer of nothing.
+///
+/// The manual implementation below deserialises a raw pair and then calls `of`, so an amount on the
+/// wire is validated exactly like one built in code. **An invariant that only the constructor
+/// enforces is an invariant with a way around it.**
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ResourceAmount {
     kind: ResourceKind,
     quantity: u64,
+}
+
+/// The wire form, before validation.
+#[derive(Deserialize)]
+struct RawAmount {
+    kind: ResourceKind,
+    quantity: u64,
+}
+
+impl<'de> Deserialize<'de> for ResourceAmount {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawAmount::deserialize(deserializer)?;
+        ResourceAmount::of(raw.kind, raw.quantity).map_err(serde::de::Error::custom)
+    }
 }
 
 impl ResourceAmount {
@@ -393,6 +421,229 @@ impl ResourceBundle {
 
 use nau_core::domain::Quota;
 
+// ---------------------------------------------------------------- D-03, the registry
+
+/// One provider's registration: what they offer, and what they have locked to offer it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceRegistration {
+    /// Who is offering, as a `Did`.
+    pub provider: String,
+    /// What they are offering.
+    pub offer: ResourceOffer,
+    /// What is locked. Moved into the stake account by the caller, not by this type — see
+    /// [`ResourceRegistry::register`].
+    pub stake: Money,
+    /// When they registered, Unix seconds.
+    pub registered_at: u64,
+}
+
+/// Who may offer resources, and what happens when they do not deliver.
+///
+/// # Both rules are read from the market's own configuration
+///
+/// [`ResourceRegistry::from_config`] takes a [`MarketConfig`](crate::MarketConfig) and keeps
+/// [`min_stake`](crate::MarketConfig::min_stake) and
+/// [`fault_slash_bps`](crate::MarketConfig::fault_slash_bps) from it. It does **not** define its own
+/// threshold or its own penalty fraction.
+///
+/// That is D-03's first criterion, and it is the reasoning this workspace keeps arriving at: a
+/// second number meaning "how much must be locked" is a second number to keep in step, and the one
+/// that goes stale is whichever the operator did not read.
+///
+/// # No new `Tier`, no new `PluginState`
+///
+/// D-03's second criterion. A resource provider is **not** a new kind of principal: it is a party
+/// that registered an offer and locked a stake, and nothing about the kernel's tier model or its
+/// lifecycle state machine changes to accommodate it. A test below asserts both variant counts, so
+/// an edit that added one here would fail rather than pass unnoticed.
+///
+/// # The penalty is computed, never taken
+///
+/// [`ResourceRegistry::slash`] takes the caller's claimed amount and **checks it for
+/// well-formedness only**. The amount it returns is `fault_slash_bps` of the balance actually
+/// bonded — upstream v2.8.2's finding F, whose lesson was that a caller-supplied penalty is a
+/// request to be sentenced by the accused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRegistry {
+    entries: BTreeMap<String, ResourceRegistration>,
+    min_stake: Money,
+    fault_slash_bps: u16,
+}
+
+impl ResourceRegistry {
+    /// A registry whose rules are the market's.
+    #[must_use]
+    pub fn from_config(config: &crate::MarketConfig) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            min_stake: config.min_stake,
+            fault_slash_bps: config.fault_slash_bps,
+        }
+    }
+
+    /// The minimum stake this registry admits at.
+    ///
+    /// Exposed so an operator can read the number **this** registry is using rather than having to
+    /// know which configuration it was built from.
+    #[must_use]
+    pub fn min_stake(&self) -> Money {
+        self.min_stake
+    }
+
+    /// The penalty fraction, in basis points.
+    #[must_use]
+    pub fn fault_slash_bps(&self) -> u16 {
+        self.fault_slash_bps
+    }
+
+    /// How many providers are registered.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether nobody is registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Whether `provider` is registered.
+    #[must_use]
+    pub fn contains(&self, provider: &str) -> bool {
+        self.entries.contains_key(provider)
+    }
+
+    /// Register or replace a provider's offer.
+    ///
+    /// The registry **checks** the stake rather than moving it: the ledger is the market's, and a
+    /// registry that moved money would be a second book. What it does is refuse an offer whose stake
+    /// is below the minimum, which makes "below the minimum cannot offer" a property of the registry
+    /// rather than of a caller's diligence.
+    ///
+    /// # Errors
+    ///
+    /// [`NauError::Validation`] when the stake is below [`ResourceRegistry::min_stake`], when the
+    /// offer is malformed, when the provider name is blank, or when the timestamp is zero.
+    pub fn register(&mut self, registration: ResourceRegistration) -> Result<()> {
+        if registration.provider.trim().is_empty() {
+            return Err(NauError::Validation(
+                "a registration must name its provider".to_string(),
+            ));
+        }
+        registration.offer.validate()?;
+        if registration.stake < self.min_stake {
+            return Err(NauError::Validation(format!(
+                "stake {} is below the minimum {} this registry admits at",
+                registration.stake.to_decimal_string(),
+                self.min_stake.to_decimal_string()
+            )));
+        }
+        if registration.registered_at == 0 {
+            return Err(NauError::Validation(
+                "a registration must carry a non-zero timestamp".to_string(),
+            ));
+        }
+        self.entries
+            .insert(registration.provider.clone(), registration);
+        Ok(())
+    }
+
+    /// Remove a provider, returning the stake that was locked.
+    ///
+    /// `None` when they were not registered. Deregistering somebody who is not there is not an
+    /// error: an operator ensuring a provider is gone should not have to know whether they ever
+    /// appeared.
+    ///
+    /// # Errors
+    ///
+    /// Never today; the signature is a `Result` so that a future rule — a cooling-off period, or a
+    /// bar on withdrawing while a dispute is open — can refuse without changing every caller.
+    pub fn deregister(&mut self, provider: &str) -> Result<Option<Money>> {
+        Ok(self.entries.remove(provider).map(|r| r.stake))
+    }
+
+    /// Whether `provider` may be matched.
+    ///
+    /// A provider is admitted exactly when they are registered, and registration requires the
+    /// stake. So this is not a second check of the threshold: it is the question the matcher asks,
+    /// and the threshold was applied when the entry was written.
+    #[must_use]
+    pub fn is_admitted(&self, provider: &str) -> bool {
+        self.entries.contains_key(provider)
+    }
+
+    /// Every admitted offer of `kind`, cheapest first.
+    ///
+    /// Sorted by price and then by provider, so the order is **deterministic**: two calls on the
+    /// same registry return the same sequence, which is what a match whose outcome is recorded
+    /// needs. D-04 does the real matching; this is the filter that says who is eligible for it.
+    #[must_use]
+    pub fn available(&self, kind: ResourceKind) -> Vec<&ResourceRegistration> {
+        let mut out: Vec<&ResourceRegistration> = self
+            .entries
+            .values()
+            .filter(|r| r.offer.amount.kind() == kind)
+            .collect();
+        out.sort_by(|a, b| {
+            a.offer
+                .price
+                .minor()
+                .cmp(&b.offer.price.minor())
+                // The provider name breaks ties, because a sort that leaves equal elements in map
+                // order is one whose result depends on insertion history.
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
+        out
+    }
+
+    /// What a guilty provider forfeits, computed from the rule.
+    ///
+    /// # The parameter that does not decide anything
+    ///
+    /// `claimed` is the amount a caller says should be slashed. It is checked — a guilty verdict
+    /// must declare a **positive** amount, so a zero there is a malformed request rather than a
+    /// lenient one — and it is then **ignored**. The returned amount is
+    /// [`ResourceRegistry::fault_slash_bps`] of `bonded`, capped at `bonded`.
+    ///
+    /// That is upstream v2.8.2's finding F, applied here for the same reason it was applied there:
+    /// a caller that could name its own penalty would be sentencing itself.
+    ///
+    /// # Errors
+    ///
+    /// [`NauError::Validation`] when the provider is not registered, when `bonded` is negative, or
+    /// when `claimed` is present and not positive.
+    pub fn slash(&self, provider: &str, bonded: Money, claimed: Option<Money>) -> Result<Money> {
+        if !self.entries.contains_key(provider) {
+            return Err(NauError::Validation(format!(
+                "`{provider}` is not registered, so there is no stake to slash"
+            )));
+        }
+        if bonded < Money::from_minor(0) {
+            return Err(NauError::Validation(
+                "a bonded balance cannot be negative".to_string(),
+            ));
+        }
+        // Well-formedness only. A caller's number is a claim about what should happen; it is not the
+        // rule, and treating a zero as "slash nothing" would make silence the lightest sentence.
+        if let Some(amount) = claimed {
+            if amount <= Money::from_minor(0) {
+                return Err(NauError::Validation(
+                    "a guilty verdict must declare a positive slash; a zero is a malformed verdict \
+                     rather than a lenient one"
+                        .to_string(),
+                ));
+            }
+        }
+        // Basis points of the balance actually bonded, in i128 so the intermediate cannot overflow
+        // before the cap. The cap is the point: a penalty cannot exceed what is there.
+        let bps = i128::from(self.fault_slash_bps.min(10_000));
+        let product = i128::from(bonded.minor()).saturating_mul(bps) / 10_000;
+        let capped = product.clamp(0, i128::from(bonded.minor()));
+        Ok(Money::from_minor(i64::try_from(capped).unwrap_or(i64::MAX)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +828,289 @@ mod tests {
         );
         assert_eq!(bundle.len(), 2);
         assert_eq!(bundle.as_map().len(), 2);
+    }
+
+    // ------------------------------------------------------------ D-03
+
+    fn config() -> crate::MarketConfig {
+        crate::MarketConfig::default()
+    }
+
+    fn registration(provider: &str, stake_minor: i64) -> ResourceRegistration {
+        ResourceRegistration {
+            provider: provider.to_string(),
+            offer: ResourceOffer {
+                provider: provider.to_string(),
+                amount: ResourceAmount::of(ResourceKind::Cpu, 100).expect("amount"),
+                price: Money::from_minor(500),
+                expires_in: 60,
+            },
+            stake: Money::from_minor(stake_minor),
+            registered_at: 1,
+        }
+    }
+
+    #[test]
+    fn a_provider_below_the_minimum_stake_cannot_offer() {
+        // D-03's first criterion. The threshold is the MARKET's -- read from `MarketConfig` rather
+        // than defined here -- so this test reads it from the same place.
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        assert_eq!(registry.min_stake(), config.min_stake);
+        assert_eq!(registry.fault_slash_bps(), config.fault_slash_bps);
+
+        let below = config.min_stake.minor() - 1;
+        let err = registry
+            .register(registration("did:example:poor", below))
+            .expect_err("must refuse a stake below the minimum");
+        let text = format!("{err}");
+        assert!(text.contains("below the minimum"), "got: {text}");
+        assert!(
+            !registry.is_admitted("did:example:poor"),
+            "a refused registration must not leave an admitted provider"
+        );
+        assert!(registry.is_empty());
+
+        // Exactly the minimum is admitted, so the rule is a floor rather than something stricter.
+        registry
+            .register(registration("did:example:ok", config.min_stake.minor()))
+            .expect("the minimum is enough");
+        assert!(registry.is_admitted("did:example:ok"));
+        assert!(registry.contains("did:example:ok"));
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn this_registry_adds_no_tier_and_no_lifecycle_state() {
+        // D-03's second criterion. A resource provider is not a new kind of principal: it is a party
+        // that registered an offer and locked a stake, and nothing about the kernel's tier model or
+        // its lifecycle state machine changes to accommodate it.
+        //
+        // The assertion on the VARIANT COUNTS lives in `nau-plugin`'s own suite rather than here, and
+        // that is the placement rule v3.6.7 recorded for the snapshot store's consistency claim:
+        // `nau-market` does not depend on `nau-plugin` -- the kernel is not a data crate's
+        // dependency -- so a test here could only reach those lists by adding a dependency that
+        // exists for the test's sake. The evidence belongs where the thing it is about lives.
+        //
+        // What this test can assert from here is the part that is this crate's: the registry treats a
+        // provider as a plain name with no kernel concept attached.
+        let mut registry = ResourceRegistry::from_config(&config());
+        registry
+            .register(registration("did:example:p", config().min_stake.minor()))
+            .expect("registered");
+        assert!(registry.is_admitted("did:example:p"));
+        // Admission is keyed by the provider's own name and nothing about its standing in any other
+        // model: two names that differ by one character are two providers.
+        assert!(!registry.is_admitted("did:example:q"));
+    }
+
+    #[test]
+    fn the_penalty_is_computed_and_the_callers_number_does_not_decide_it() {
+        // D-03's third criterion, and the shape upstream v2.8.2's finding F established for
+        // slashing: a caller that could name its own penalty would be sentencing itself.
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        registry
+            .register(registration("did:example:p", config.min_stake.minor()))
+            .expect("registered");
+
+        let bonded = Money::from_minor(1_000_000);
+        // 1000 bps of 1,000,000 is 100,000.
+        let computed = registry
+            .slash("did:example:p", bonded, None)
+            .expect("slash");
+        assert_eq!(computed, Money::from_minor(100_000));
+
+        // The caller asks for a tenth of that, and a tenth of that is not what happens.
+        let lenient = registry
+            .slash("did:example:p", bonded, Some(Money::from_minor(1)))
+            .expect("slash");
+        assert_eq!(
+            lenient, computed,
+            "the caller's amount must not decide the penalty"
+        );
+
+        // The caller asks for ten times it, and the cap is what is actually bonded.
+        let greedy = registry
+            .slash("did:example:p", bonded, Some(Money::from_minor(10_000_000)))
+            .expect("slash");
+        assert_eq!(greedy, computed, "and neither must a larger number");
+
+        // A zero claim is refused as MALFORMED rather than honoured as lenient -- treating silence
+        // as the lightest sentence is the failure this rule exists to prevent.
+        let err = registry
+            .slash("did:example:p", bonded, Some(Money::from_minor(0)))
+            .expect_err("must refuse a zero claim");
+        assert!(format!("{err}").contains("positive"), "got: {err}");
+
+        // And an unregistered provider has no stake to slash.
+        assert!(registry
+            .slash("did:example:stranger", bonded, None)
+            .is_err());
+    }
+
+    #[test]
+    fn the_penalty_never_exceeds_what_is_bonded() {
+        // The cap, at a fraction that would otherwise overshoot: 10,000 bps is all of it, and a
+        // configuration above 10,000 is clamped rather than paying out more than is there.
+        let mut config = config();
+        config.fault_slash_bps = 20_000;
+        let mut registry = ResourceRegistry::from_config(&config);
+        registry
+            .register(registration("did:example:p", config.min_stake.minor()))
+            .expect("registered");
+        let bonded = Money::from_minor(7_777);
+        assert_eq!(
+            registry
+                .slash("did:example:p", bonded, None)
+                .expect("slash"),
+            bonded,
+            "a penalty cannot exceed the balance it is taken from"
+        );
+    }
+
+    #[test]
+    fn deregistering_returns_the_stake_and_a_stranger_is_not_an_error() {
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        registry
+            .register(registration("did:example:p", config.min_stake.minor()))
+            .expect("registered");
+
+        let returned = registry
+            .deregister("did:example:p")
+            .expect("deregisters")
+            .expect("was registered");
+        assert_eq!(returned, config.min_stake);
+        assert!(!registry.is_admitted("did:example:p"));
+        assert!(registry.is_empty());
+
+        // Somebody who was never here: an operator ensuring a provider is gone should not have to
+        // know whether they ever appeared.
+        assert!(registry
+            .deregister("did:example:never")
+            .expect("not an error")
+            .is_none());
+    }
+
+    #[test]
+    fn available_is_deterministic_and_filtered_by_kind() {
+        // A match whose outcome is recorded needs a sequence that does not depend on insertion
+        // history, so equals are broken by provider name rather than left in map order.
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        for (provider, price, kind) in [
+            ("did:example:c", 900, ResourceKind::Cpu),
+            ("did:example:a", 900, ResourceKind::Cpu),
+            ("did:example:b", 100, ResourceKind::Cpu),
+            ("did:example:d", 1, ResourceKind::Memory),
+        ] {
+            registry
+                .register(ResourceRegistration {
+                    offer: ResourceOffer {
+                        provider: provider.to_string(),
+                        amount: ResourceAmount::of(kind, 10).expect("amount"),
+                        price: Money::from_minor(price),
+                        expires_in: 60,
+                    },
+                    ..registration(provider, config.min_stake.minor())
+                })
+                .expect("registered");
+        }
+
+        let cpu: Vec<&str> = registry
+            .available(ResourceKind::Cpu)
+            .iter()
+            .map(|r| r.provider.as_str())
+            .collect();
+        assert_eq!(
+            cpu,
+            vec!["did:example:b", "did:example:a", "did:example:c"],
+            "cheapest first, and equal prices broken by name rather than by insertion"
+        );
+        assert_eq!(registry.available(ResourceKind::Memory).len(), 1);
+        assert!(registry.available(ResourceKind::Snapshot).is_empty());
+
+        // Called twice, same answer: the property a recorded outcome needs.
+        let again: Vec<&str> = registry
+            .available(ResourceKind::Cpu)
+            .iter()
+            .map(|r| r.provider.as_str())
+            .collect();
+        assert_eq!(cpu, again);
+    }
+
+    #[test]
+    fn a_registration_with_no_provider_no_timestamp_or_a_bad_offer_is_refused() {
+        let config = config();
+        let mut registry = ResourceRegistry::from_config(&config);
+        let good = registration("did:example:p", config.min_stake.minor());
+
+        let mut blank = good.clone();
+        blank.provider = "   ".to_string();
+        assert!(
+            registry.register(blank).is_err(),
+            "a provider must be named"
+        );
+
+        let mut timeless = good.clone();
+        timeless.registered_at = 0;
+        assert!(
+            registry.register(timeless).is_err(),
+            "a registration must carry a non-zero timestamp"
+        );
+
+        let mut free = good.clone();
+        free.offer.price = Money::from_minor(0);
+        assert!(
+            registry.register(free).is_err(),
+            "a free offer is not an offer"
+        );
+
+        assert!(registry.is_empty(), "nothing malformed may be admitted");
+    }
+
+    #[test]
+    fn an_amount_arriving_as_json_is_validated_like_one_built_in_code() {
+        // The defect this catches: `ResourceAmount` derived `Deserialize`, and the derive bypassed
+        // `of` -- so an amount on the wire could be zero, which is the one value `of` exists to
+        // refuse. The deployment check found it by sending a registration whose amount came from
+        // JSON rather than from the constructor.
+        let ok: ResourceAmount =
+            serde_json::from_str(r#"{"kind":"cpu","quantity":100}"#).expect("a positive amount");
+        assert_eq!(ok.quantity(), 100);
+        assert_eq!(ok.kind(), ResourceKind::Cpu);
+
+        let zero = serde_json::from_str::<ResourceAmount>(r#"{"kind":"cpu","quantity":0}"#);
+        assert!(
+            zero.is_err(),
+            "an amount of nothing must be refused on the wire exactly as it is in code"
+        );
+        let text = format!("{}", zero.expect_err("refused"));
+        assert!(
+            text.contains("offer of nothing"),
+            "and with the same reason, got: {text}"
+        );
+
+        // An unknown kind is refused by serde itself, which is the other half of the wire being a
+        // closed vocabulary.
+        assert!(serde_json::from_str::<ResourceAmount>(r#"{"kind":"gpu","quantity":1}"#).is_err());
+    }
+
+    #[test]
+    fn a_registration_round_trips_through_json_with_its_money_transparent() {
+        // `Money` is `#[serde(transparent)]` over an i64, so a price is a JSON INTEGER. The
+        // deployment check's first version sent an object and was refused with
+        // `invalid type: map, expected i64` -- the wire form is the crate's, and this pins it.
+        let config = config();
+        let registration = registration("did:example:p", config.min_stake.minor());
+        let text = serde_json::to_string(&registration).expect("serialises");
+        assert!(
+            text.contains(r#""stake":"#) && !text.contains(r#""stake":{"#),
+            "the stake must be a JSON integer, got: {text}"
+        );
+        let back: ResourceRegistration = serde_json::from_str(&text).expect("deserialises");
+        assert_eq!(back, registration);
     }
 
     #[test]

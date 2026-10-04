@@ -763,6 +763,120 @@ async function main() {
     return `6 kinds with 6 distinct units, and ${names.length} capabilities refused by name`;
   });
 
+  // D-03's three criteria, in the running node: a stake below the market's own minimum is refused,
+  // and a caller's claimed penalty does not decide the penalty.
+  await check('a provider below the market minimum cannot offer, and cannot name its own penalty', async () => {
+    const resource = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.resource/call', body);
+
+    const offer = {
+      provider: 'did:example:deploy-check',
+      amount: { kind: 'cpu', quantity: 100 },
+      // Money is #[serde(transparent)] over an i64, so a price is a JSON INTEGER and not an
+      // object. The first version of this check sent { minor: 500 } and the plugin refused it
+      // with invalid type: map, expected i64 -- the wire form is the crate's, not this script's.
+      price: 500,
+      expires_in: 60,
+    };
+
+    // Below the minimum. The threshold is the MARKET's, read through the plugin rather than
+    // restated here -- so this script cannot disagree with the configuration about what it is.
+    const low = await resource({
+      capability: 'plugin:storage:own',
+      op: 'register',
+      registration: {
+        provider: 'did:example:poor',
+        offer,
+        stake: 1,
+        registered_at: 1,
+      },
+    });
+    assert(
+      low.status === 400,
+      `a stake below the minimum must be refused: HTTP ${low.status}: ${low.text.slice(0, 200)}`,
+    );
+    assert(
+      low.text.includes('below the minimum'),
+      `the refusal must say which rule: ${low.text.slice(0, 200)}`,
+    );
+
+    const notAdmitted = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'admitted',
+      provider: 'did:example:poor',
+    });
+    assert(
+      notAdmitted.json && notAdmitted.json.admitted === false,
+      'a refused registration must not leave an admitted provider',
+    );
+    const minimum = Number(notAdmitted.json.min_stake.replace(/[^0-9]/g, '')) || 0;
+    assert(minimum > 0, `the plugin must publish the minimum it is using, got ${notAdmitted.json.min_stake}`);
+
+    // At the minimum, admitted. The number comes from the plugin rather than being assumed.
+    const ok = await resource({
+      capability: 'plugin:storage:own',
+      op: 'register',
+      registration: {
+        provider: 'did:example:deploy-check',
+        offer,
+        stake: 100_000_000,
+        registered_at: 1,
+      },
+    });
+    assert(
+      ok.status >= 200 && ok.status < 300,
+      `the market's own minimum stake must be enough: HTTP ${ok.status}: ${ok.text.slice(0, 220)}`,
+    );
+
+    // The penalty is computed. The caller asks for one minor unit and gets the rule's answer.
+    const lenient = await resource({
+      capability: 'plugin:storage:own',
+      op: 'slash',
+      provider: 'did:example:deploy-check',
+      bonded_minor: 1_000_000,
+      claimed_minor: 1,
+    });
+    assert(
+      lenient.status >= 200 && lenient.status < 300,
+      `slash -> HTTP ${lenient.status}: ${lenient.text.slice(0, 200)}`,
+    );
+    assert(
+      lenient.json.slashed_minor > 1,
+      `the caller's claim must not decide the penalty; it asked for 1 and got ${lenient.json.slashed_minor}`,
+    );
+    assert(
+      lenient.json.claim_decided_it === false,
+      'the answer must say plainly that the claim did not decide it',
+    );
+
+    // A zero claim is malformed rather than lenient: silence must not be the lightest sentence.
+    const zero = await resource({
+      capability: 'plugin:storage:own',
+      op: 'slash',
+      provider: 'did:example:deploy-check',
+      bonded_minor: 1_000_000,
+      claimed_minor: 0,
+    });
+    assert(
+      zero.status === 400,
+      `a zero claim must be refused as malformed, got HTTP ${zero.status}: ${zero.text.slice(0, 160)}`,
+    );
+
+    // And writing the registry needs the storage capability, not merely a read: the first version
+    // of this check used the read and was refused, which is the capability model working.
+    const wrongCap = await resource({
+      capability: 'plugin:lifecycle:read',
+      op: 'register',
+      registration: { provider: 'did:example:x', offer, stake: 100_000_000, registered_at: 1 },
+    });
+    assert(
+      wrongCap.status === 400,
+      `writing the registry under a read capability must be refused: HTTP ${wrongCap.status}`,
+    );
+
+    return `refused below-minimum and a zero claim, and the rule decided the penalty`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
