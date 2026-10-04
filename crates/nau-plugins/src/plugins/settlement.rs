@@ -34,6 +34,7 @@
 //! are the on-chain surface this repository actually has, and every rail below either names one of
 //! them or says what it would need that no of them provides.
 
+use nau_core::error::{NauError, Result as NauResult};
 use nau_plugin::bus::PmbMessage;
 use nau_plugin::capability::Capability;
 use nau_plugin::{PluginId, Result};
@@ -52,6 +53,9 @@ pub const OPERATIONS: &[&str] = &[
     "bitcoin",
     // E-07: what a settlement makes public, item by item.
     "privacy",
+    // E-08: the cross-chain limits and the risk register.
+    "cross-chain",
+    "risks",
 ];
 
 /// How a rail is provided, or why it is not.
@@ -599,6 +603,247 @@ impl PrivacyBoundary {
     }
 }
 
+/// What bounds a cross-chain transfer, and whether one can happen at all.
+///
+/// # E-08's first criterion: the limits are enforced, not declared
+///
+/// A cross-chain transfer needs **a per-transfer ceiling and a time lock**, and E-08's wording is that
+/// they are **enforced**. So [`CrossChainLimits::admits`] is a check that returns a refusal rather
+/// than a figure a caller is expected to respect, and [`CrossChainSupport`] refuses outright.
+///
+/// # E-08's second criterion: unavailable means REFUSED, never pending
+///
+/// A bridge that is down and a transfer that is waiting look the same from outside, and only one of
+/// them is a state a caller should be able to act on. There is no `Pending` variant here, for the same
+/// reason A-03's `EnforcementSupport` has no `Probably`: a caller told to wait waits, and a caller
+/// told no does something else.
+///
+/// # E-08's third criterion: a compromised bridge is a NAMED, ACCEPTED boundary
+///
+/// "A cross-chain bridge being compromised is named as a known boundary, and **must not be written
+/// into 'mitigated'**."
+///
+/// The strongest form of that is two lists that cannot both contain an item: [`RiskRegister`] has
+/// `mitigated` and `accepted`, and a test asserts they are **disjoint**. A risk cannot be moved from
+/// one to the other without deleting it from the first, which makes the move a visible act rather than
+/// an edit to a sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrossChainLimits {
+    /// The most one transfer may move, in minor units.
+    pub per_transfer_max_minor: i64,
+    /// How long a transfer's lock must hold before it can be released, in seconds.
+    ///
+    /// **A floor and not a ceiling**, which is the direction that matters: a lock shorter than the
+    /// counterparty's finality window is one that can be released before the other side is
+    /// irreversible, and that is exactly how an atomic swap stops being atomic.
+    pub min_time_lock_seconds: u64,
+}
+
+impl CrossChainLimits {
+    /// Whether a transfer of `amount_minor` with a `time_lock_seconds` lock is within the limits.
+    ///
+    /// # Errors
+    ///
+    /// [`NauError::Validation`] naming which bound failed. Both are refusals rather than clamps, for
+    /// the reason E-06's payment limits are: a transfer quietly reduced is one the sender believed
+    /// happened.
+    pub fn admits(&self, amount_minor: i64, time_lock_seconds: u64) -> NauResult<()> {
+        if amount_minor <= 0 {
+            return Err(NauError::Validation(
+                "a cross-chain transfer must move a positive amount".to_string(),
+            ));
+        }
+        if amount_minor > self.per_transfer_max_minor {
+            return Err(NauError::Validation(format!(
+                "a transfer of {amount_minor} exceeds the per-transfer limit of {}: refused rather \
+                 than clamped, because a transfer quietly reduced is one the sender believed \
+                 happened",
+                self.per_transfer_max_minor
+            )));
+        }
+        if time_lock_seconds < self.min_time_lock_seconds {
+            return Err(NauError::Validation(format!(
+                "a time lock of {time_lock_seconds}s is shorter than the floor of {}s: a lock that \
+                 can be released before the counterparty is irreversible is not an atomic swap, it \
+                 is one side taking the other's money",
+                self.min_time_lock_seconds
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Default for CrossChainLimits {
+    /// Conservative starting figures, stated as a judgement rather than a measurement.
+    fn default() -> Self {
+        Self {
+            per_transfer_max_minor: 500_000,
+            // Twelve hours: long enough that a counterparty's finality window is inside it on any
+            // chain this workspace has ever discussed, and short enough that a stuck transfer
+            // returns.
+            min_time_lock_seconds: 43_200,
+        }
+    }
+}
+
+/// Whether cross-chain settlement exists here.
+///
+/// # E-08's premise, confirmed and needing no correction
+///
+/// The plan says `HTLC` has zero hits and that cross-chain settlement therefore cannot be offered.
+/// Re-run: the literal `HTLC` appears in this repository's Rust only inside refusal tables — the
+/// resource plugin's and this one — and **nowhere as a mechanism**. So there is no hash-time-locked
+/// contract, on this chain or any other, and this refuses.
+///
+/// Unlike E-02's, E-03's and E-05's premises, this one needed no correction: the count was zero when
+/// the plan was written and the appearances now are the refusals this family added. That is the second
+/// release in a row where the premise held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossChainSupport {
+    /// It exists, and here is what provides it.
+    Available {
+        /// What provides it.
+        via: &'static str,
+    },
+    /// It does not, and here is what is missing.
+    Refused {
+        /// Why not.
+        reason: &'static str,
+    },
+}
+
+impl CrossChainSupport {
+    /// What this node provides.
+    #[must_use]
+    pub fn current() -> Self {
+        CrossChainSupport::Refused {
+            reason: "there is no hash-time-locked contract in this repository and no second chain to \
+                     lock against: `HTLC` appears only inside refusal tables. A cross-chain transfer \
+                     that cannot be made atomic is not one this node will start, and refusing is the \
+                     answer rather than holding it pending -- a caller told to wait waits, and a \
+                     caller told no does something else.",
+        }
+    }
+
+    /// Whether it is available.
+    #[must_use]
+    pub fn is_available(self) -> bool {
+        matches!(self, CrossChainSupport::Available { .. })
+    }
+
+    /// The reason it is not, if it is not.
+    #[must_use]
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            CrossChainSupport::Available { .. } => None,
+            CrossChainSupport::Refused { reason } => Some(reason),
+        }
+    }
+}
+
+/// What this system knows is risky, split into what it mitigates and what it accepts.
+///
+/// # The two lists are disjoint, and a test says so
+///
+/// E-08's third criterion forbids writing a compromised bridge into "mitigated". The strongest form of
+/// that is a register where the two lists **cannot both contain the same risk**, so moving one is a
+/// visible act: an item has to be deleted from `accepted` to appear in `mitigated`, and that deletion
+/// is a diff somebody has to write.
+///
+/// A single list with a `mitigated: bool` would have made the move a one-character edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RiskRegister {
+    /// Risks that have a mitigation in this codebase, each naming it.
+    pub mitigated: Vec<(&'static str, &'static str)>,
+    /// Risks that are **known and not mitigated**, each saying why they are not.
+    ///
+    /// This is the list a reader should look at first. A register with only mitigations is a statement
+    /// that nothing is wrong, which is a stronger claim than any of these releases makes.
+    pub accepted: Vec<(&'static str, &'static str)>,
+}
+
+impl RiskRegister {
+    /// The register as it stands.
+    #[must_use]
+    pub fn current() -> Self {
+        Self {
+            mitigated: vec![
+                (
+                    "a caller naming its own penalty",
+                    "the penalty is computed from `fault_slash_bps` of what is bonded, and a \
+                     caller's figure is checked for well-formedness and then ignored (D-03)",
+                ),
+                (
+                    "a resource bound being exceeded silently",
+                    "every mutation is `checked_` and refuses on overflow rather than saturating \
+                     (D-07)",
+                ),
+                (
+                    "a private key reaching a sandbox",
+                    "the payment request has fields for public data only, so a key has nowhere to go, \
+                     and the host does the signing (E-06)",
+                ),
+                (
+                    "a settlement reporting agreement it does not have",
+                    "agreement requires both sides present and equal, and an absent side blocks \
+                     (E-04)",
+                ),
+            ],
+            accepted: vec![
+                (
+                    "a cross-chain bridge being compromised",
+                    "NOT MITIGATED, and not mitigable from inside this repository: the code that \
+                     would be compromised is not here, and a bridge's honesty is not something a node \
+                     on one side of it can verify. This node therefore refuses cross-chain \
+                     settlement entirely rather than bounding a risk it cannot see -- and if a bridge \
+                     is integrated later, this entry stays in THIS list until something outside this \
+                     repository can be shown to address it",
+                ),
+                (
+                    "the real scale of the agent economy",
+                    "recorded as unknown rather than estimated: the metrics report what this \
+                     workspace can measure and say so (E-10)",
+                ),
+                (
+                    "regulatory uncertainty",
+                    "NOT MITIGATED, and not this repository's to resolve: what a jurisdiction permits \
+                     is outside a codebase, and this register records it as an accepted boundary \
+                     rather than a solved problem",
+                ),
+                (
+                    "a node's own ledger being the only record",
+                    "accepted: `nau-ledger` is the single source of truth (E-04), which is a strength \
+                     for consistency and a single point of failure for availability",
+                ),
+            ],
+        }
+    }
+
+    /// Whether a risk appears in both lists.
+    ///
+    /// Returns the offenders rather than a boolean, so a failure names what to look at.
+    #[must_use]
+    pub fn overlap(&self) -> Vec<&'static str> {
+        self.mitigated
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| self.accepted.iter().any(|(other, _)| other == name))
+            .collect()
+    }
+
+    /// Whether `name` is recorded as accepted.
+    #[must_use]
+    pub fn is_accepted(&self, name: &str) -> bool {
+        self.accepted.iter().any(|(n, _)| *n == name)
+    }
+
+    /// Whether `name` is recorded as mitigated.
+    #[must_use]
+    pub fn is_mitigated(&self, name: &str) -> bool {
+        self.mitigated.iter().any(|(n, _)| *n == name)
+    }
+}
+
 /// What a route decision was based on.
 ///
 /// Restored, because inserting `BitcoinCapability` above it separated this struct from its doc
@@ -971,6 +1216,90 @@ impl SystemPlugin for SettlementPlugin {
                         "not_an_absence": "not doing private payments is an EXPLICIT answer a caller \
                                            can query, not a silence to be inferred from a missing \
                                            feature",
+                    }),
+                ))
+            }
+            // E-08. The limits are checked, and the answer is a refusal rather than a pending state.
+            "cross-chain" => {
+                let amount_minor = i64::try_from(
+                    payload::optional_u64(&msg.payload, "amount_minor")?.unwrap_or(0),
+                )
+                .unwrap_or(i64::MAX);
+                let time_lock_seconds =
+                    payload::optional_u64(&msg.payload, "time_lock_seconds")?.unwrap_or(0);
+                let limits = CrossChainLimits::default();
+                let support = CrossChainSupport::current();
+                // The order matters and is the point: availability is checked FIRST, so a transfer
+                // that could not happen anyway is refused for that reason rather than for exceeding a
+                // bound. A caller that was told "too large" would reasonably try a smaller one.
+                let outcome: std::result::Result<(), (String, &'static str)> =
+                    if let Some(reason) = support.refusal() {
+                        Err((reason.to_string(), "unavailable"))
+                    } else {
+                        match limits.admits(amount_minor, time_lock_seconds) {
+                            Ok(()) => Ok(()),
+                            Err(e) => Err((e.to_string(), "out_of_limits")),
+                        }
+                    };
+                let refusal = outcome.as_ref().err().cloned();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "available": support.is_available(),
+                        "per_transfer_max_minor": limits.per_transfer_max_minor,
+                        "min_time_lock_seconds": limits.min_time_lock_seconds,
+                        "requested": {
+                            "amount_minor": amount_minor,
+                            "time_lock_seconds": time_lock_seconds,
+                        },
+                        "accepted": outcome.is_ok(),
+                        // Destructured once rather than calling err() twice: the first call
+                        // MOVES the value, which the compiler caught.
+                        "refused_because": refusal.as_ref().map(|(reason, _)| reason.clone()),
+                        "refusal_kind": refusal.as_ref().map(|(_, kind)| *kind),
+                        "no_pending_state": "an unavailable bridge is REFUSED rather than held: a \
+                                             caller told to wait waits, and a caller told no does \
+                                             something else. There is no `Pending` variant for the \
+                                             same reason A-03's EnforcementSupport has no \
+                                             `Probably`.",
+                        "limits_are_enforced": "`admits` returns a refusal rather than a figure a \
+                                                caller is expected to respect, and the time lock is \
+                                                a FLOOR -- a lock shorter than the counterparty's \
+                                                finality window is how an atomic swap stops being \
+                                                atomic",
+                    }),
+                ))
+            }
+            // E-08's third criterion. The register, with the bridge compromise in the accepted list.
+            "risks" => {
+                let register = RiskRegister::current();
+                let overlap = register.overlap();
+                Ok(payload::answer(
+                    Self::ID,
+                    op,
+                    json!({
+                        "mitigated": register.mitigated.iter().map(|(risk, how)| json!({
+                            "risk": risk,
+                            "how": how,
+                        })).collect::<Vec<_>>(),
+                        "accepted": register.accepted.iter().map(|(risk, why)| json!({
+                            "risk": risk,
+                            "why_not_mitigated": why,
+                        })).collect::<Vec<_>>(),
+                        "counts": {
+                            "mitigated": register.mitigated.len(),
+                            "accepted": register.accepted.len(),
+                        },
+                        "disjoint": overlap.is_empty(),
+                        "overlap": overlap,
+                        "why_two_lists": "a single list with a `mitigated` flag would make moving a \
+                                          risk between the two a one-character edit. Two lists mean \
+                                          an item has to be DELETED from one to appear in the other, \
+                                          and that deletion is a diff somebody has to write.",
+                        "read_this_first": "the accepted list: a register with only mitigations is a \
+                                            statement that nothing is wrong, which is a stronger \
+                                            claim than any of these releases makes",
                     }),
                 ))
             }
@@ -1446,6 +1775,118 @@ mod tests {
             lines.iter().filter(|l| l.starts_with("withheld:")).count(),
             withheld
         );
+    }
+    // ---------------------------------------------------------------- E-08
+
+    #[test]
+    fn cross_chain_settlement_refuses_and_there_is_no_pending_state() {
+        // E-08's second criterion, and the type is the proof: `CrossChainSupport` has two variants and
+        // neither means "waiting". A caller told to wait waits; a caller told no does something else.
+        let support = CrossChainSupport::current();
+        assert!(!support.is_available());
+        let reason = support.refusal().expect("a reason");
+        assert!(reason.contains("HTLC"), "{reason}");
+        assert!(
+            reason.contains("pending"),
+            "and must say why a pending state is not offered: {reason}"
+        );
+        assert!(
+            reason.contains("refusal tables"),
+            "and must say where the only HTLC appearances are: {reason}"
+        );
+    }
+
+    #[test]
+    fn the_cross_chain_limits_are_enforced_and_the_time_lock_is_a_floor() {
+        // E-08's first criterion. Both bounds are refusals rather than clamps, and the time lock's
+        // direction is the one that matters: a lock shorter than the counterparty's finality window is
+        // how an atomic swap stops being atomic.
+        let limits = CrossChainLimits::default();
+        assert!(limits.admits(1_000, limits.min_time_lock_seconds).is_ok());
+
+        // The per-transfer ceiling.
+        let too_much = limits.admits(limits.per_transfer_max_minor + 1, 86_400);
+        let text = format!("{}", too_much.expect_err("refused"));
+        assert!(text.contains("exceeds the per-transfer limit"), "{text}");
+        assert!(text.contains("refused rather than clamped"), "{text}");
+
+        // The time lock, as a FLOOR: one second under is refused, exactly at it is accepted.
+        let too_short = limits.admits(1_000, limits.min_time_lock_seconds - 1);
+        let short_text = format!("{}", too_short.expect_err("refused"));
+        assert!(
+            short_text.contains("shorter than the floor"),
+            "{short_text}"
+        );
+        assert!(
+            short_text.contains("one side taking the other's money"),
+            "and must say what a short lock enables: {short_text}"
+        );
+        assert!(limits.admits(1_000, limits.min_time_lock_seconds).is_ok());
+        // A longer lock is fine -- it is a floor and not a window.
+        assert!(limits
+            .admits(1_000, limits.min_time_lock_seconds * 10)
+            .is_ok());
+
+        // And a non-positive amount.
+        assert!(limits.admits(0, 86_400).is_err());
+        assert!(limits.admits(-1, 86_400).is_err());
+
+        // The default's two figures are a judgement, and the lock is long enough to be one.
+        assert!(limits.per_transfer_max_minor > 0);
+        assert!(
+            limits.min_time_lock_seconds >= 3_600,
+            "a lock measured in minutes is not a finality window"
+        );
+    }
+
+    #[test]
+    fn a_compromised_bridge_is_accepted_and_never_mitigated() {
+        // E-08's third criterion, and the disjointness is what makes it enforceable: a risk cannot be
+        // moved from `accepted` to `mitigated` without DELETING it from the first, and that deletion
+        // is a diff somebody has to write. A single list with a flag would have made it a
+        // one-character edit.
+        let register = RiskRegister::current();
+        assert!(
+            register.overlap().is_empty(),
+            "the two lists must be disjoint: {:?}",
+            register.overlap()
+        );
+        assert!(register.is_accepted("a cross-chain bridge being compromised"));
+        assert!(
+            !register.is_mitigated("a cross-chain bridge being compromised"),
+            "writing it into `mitigated` is exactly what E-08 forbids"
+        );
+        // And the entry says what would have to change for it to move.
+        let (_, why) = register
+            .accepted
+            .iter()
+            .find(|(risk, _)| *risk == "a cross-chain bridge being compromised")
+            .expect("the entry");
+        assert!(why.starts_with("NOT MITIGATED"), "{why}");
+        assert!(
+            why.contains("not mitigable from inside this repository"),
+            "and must say why it cannot be mitigated here: {why}"
+        );
+
+        // E-10's two boundaries are recorded here too, with the same honesty.
+        assert!(register.is_accepted("regulatory uncertainty"));
+        assert!(register.is_accepted("the real scale of the agent economy"));
+        assert!(
+            register.accepted.len() >= 4,
+            "a register with only mitigations claims nothing is wrong"
+        );
+        assert!(
+            !register.mitigated.is_empty(),
+            "and this codebase does mitigate some things"
+        );
+        // Every entry, in both lists, says something a reader can act on.
+        for (risk, detail) in register.mitigated.iter().chain(register.accepted.iter()) {
+            assert!(!risk.is_empty());
+            assert!(
+                detail.len() > 40,
+                "`{risk}` is too short to act on: {detail}"
+            );
+        }
     }
     #[test]
     fn it_holds_no_capability_that_could_move_value() {

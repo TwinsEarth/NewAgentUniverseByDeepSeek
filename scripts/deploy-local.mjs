@@ -2285,6 +2285,87 @@ async function main() {
     return `7 exposures each with a source, 4 withholdings, and "not available" as a queryable answer`;
   });
 
+  // E-08's three criteria. The third is the one worth reading carefully: a risk register with two
+  // DISJOINT lists, so writing a compromised bridge into "mitigated" requires deleting it from
+  // "accepted" -- a diff somebody has to write rather than a flag somebody can flip.
+  await check('cross-chain refuses rather than pending, and the bridge risk is accepted not mitigated', async () => {
+    const settlement = async (body) =>
+      api('POST', '/plugins/com.twinsearth.sys.settlement/call', body);
+
+    // E-08's first criterion: the limits are checked, and the time lock is a FLOOR.
+    const within = await settlement({
+      capability: 'plugin:lifecycle:read',
+      op: 'cross-chain',
+      amount_minor: 1_000,
+      time_lock_seconds: 86_400,
+    });
+    assert(
+      within.status >= 200 && within.status < 300,
+      `cross-chain -> HTTP ${within.status}: ${within.text.slice(0, 220)}`,
+    );
+    assert(within.json.available === false, 'no cross-chain settlement may be available');
+    // The refusal comes FIRST, before the bounds -- a caller told "too large" would try a smaller one.
+    assert(
+      within.json.refusal_kind === 'unavailable',
+      `availability must be checked before the limits: ${JSON.stringify(within.json.refusal_kind)}`,
+    );
+    assert(
+      String(within.json.refused_because).includes('HTLC'),
+      `the refusal must name what is missing: ${within.json.refused_because}`,
+    );
+    assert(
+      String(within.json.no_pending_state).includes('told to wait waits'),
+      `and must say why no pending state is offered: ${within.json.no_pending_state}`,
+    );
+    assert(within.json.per_transfer_max_minor > 0, 'the ceiling is published');
+    assert(
+      within.json.min_time_lock_seconds >= 3_600,
+      `the lock floor is a finality window, not minutes: ${within.json.min_time_lock_seconds}`,
+    );
+    assert(
+      String(within.json.limits_are_enforced).includes('FLOOR'),
+      `the direction of the lock must be stated: ${within.json.limits_are_enforced}`,
+    );
+
+    // E-08's third criterion: the register, with the bridge in the accepted list and the two
+    // disjoint.
+    const risks = await settlement({ capability: 'plugin:lifecycle:read', op: 'risks' });
+    assert(risks.json.disjoint === true, `the lists must be disjoint: ${JSON.stringify(risks.json.overlap)}`);
+    assert(risks.json.overlap.length === 0, JSON.stringify(risks.json.overlap));
+    const accepted = risks.json.accepted.map((r) => r.risk);
+    const mitigated = risks.json.mitigated.map((r) => r.risk);
+    assert(
+      accepted.includes('a cross-chain bridge being compromised'),
+      `the bridge compromise must be NAMED as accepted: ${JSON.stringify(accepted)}`,
+    );
+    assert(
+      !mitigated.includes('a cross-chain bridge being compromised'),
+      `and must NOT appear in mitigated: ${JSON.stringify(mitigated)}`,
+    );
+    const bridge = risks.json.accepted.find((r) => r.risk === 'a cross-chain bridge being compromised');
+    assert(
+      bridge.why_not_mitigated.startsWith('NOT MITIGATED'),
+      `the entry must say so plainly: ${bridge.why_not_mitigated}`,
+    );
+    assert(
+      bridge.why_not_mitigated.includes('not mitigable from inside this repository'),
+      `and must say why it cannot be mitigated here: ${bridge.why_not_mitigated}`,
+    );
+    // E-10's two boundaries are recorded here as well, which is what makes this a register rather
+    // than a mitigation list.
+    for (const boundary of ['regulatory uncertainty', 'the real scale of the agent economy']) {
+      assert(accepted.includes(boundary), `\`${boundary}\` must be recorded: ${JSON.stringify(accepted)}`);
+    }
+    assert(risks.json.counts.accepted >= 4, JSON.stringify(risks.json.counts));
+    assert(risks.json.counts.mitigated >= 1, JSON.stringify(risks.json.counts));
+    assert(
+      String(risks.json.why_two_lists).includes('DELETED'),
+      `the answer must say why two lists rather than a flag: ${risks.json.why_two_lists}`,
+    );
+
+    return `refused before the bounds, and the bridge risk is accepted in a disjoint list`;
+  });
+
   await check('a plugin is quarantined on the third violation, not before', async () => {
     const victim = 'com.twinsearth.sys.security.tribunal';
     const threshold = 3;
