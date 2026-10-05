@@ -3,6 +3,78 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.9.11] — 找到并修好那个让 9 道关卡在 CI 里失败的原因：**cmd 在空格处切开了 node 的路径**
+
+**这是 v3.9.10 撤掉 CI 关卡步骤后，用真实日志（而不是继续猜）查出来的真因** ✓
+
+### 症状，以及为什么它看起来毫无规律
+
+**9 道关卡失败，全部耗时 0.0–0.1s**，Windows 上统一报 **`operable program or batch file.`** ✗
+而 **`Production code has no panic path` 报 `0 site(s)`** —— **关卡跑了，但扫到了空** ✗
+
+**通过的 12 道**：纯 JS 的（`env-template` / `economy-invariants` / `doc-counts` / `defence-in-depth`）
+与 spawn `cargo`、`python3` 的 ✓
+
+### 真因（**来自真实 job 日志，不是推测**）
+
+`scripts/verify-all.mjs` 的 `run()` 在 Windows 上走 `shell: true` ✓ —— **而 cmd 按空格切分整条命令行** ✓
+`NODE = process.execPath` ✓ —— **在 GitHub Windows runner 上那是 `C:\Program Files\nodejs\node.exe`** ✗
+
+> **所以 cmd 被要求执行 `C:\Program`，并回答：**
+> **`'C:\Program' is not recognized as an internal or external command, operable program or batch file.`**
+
+**这解释了每一个曾经让它看起来随机的现象**：
+
+| 现象 | 解释 |
+|---|---|
+| **只有 spawn `NODE` 的关卡失败** | `cargo` / `python3` **里面没有空格** ✓ |
+| **不 spawn 的关卡全过** | **它们是纯 JavaScript** ✓ |
+| **`no panic path` 报 `0 site(s)` 而不是报错** | **子进程带着错误的 argv 启动，什么都没扫** —— **一道跑了却找到 0 处的关卡读起来像「发现」，而不像「调用坏了」** |
+| **本地永远复现不了** | **开发者的 node 在一条没有空格的路径上** ✓ |
+
+### 修复，以及**第一次修复为什么不够**
+
+**给命令加引号** ✓ —— **但只加命令不够** ✗ —— **证明脚本显示子进程随后报 `Cannot find module '<前缀>'`，
+那是同一个空格，往后挪了一个 token** ✓
+
+**所以命令与每一个参数都在需要时加引号** ✓ —— **而没有空格的（`cargo` / `python3` / 相对脚本路径）原样通过** ✓
+
+### 而它被**构造条件**证明
+
+**本机复现不了** ✗ —— **所以证明脚本把解释器复制到一条带空格的路径上** ✓：
+
+| | 输出 |
+|---|---|
+| **修复前** | `'E:\DS\_work\spaced' is not recognized…` —— **与 CI 日志逐字一致** ✓ |
+| **修复后** | `CHILD-RAN-OK`，status 0 ✓ |
+| **对照** | `cargo` / `python3` / `scripts/check-no-panics.mjs` **均未被改动** ✓ |
+
+**一次不能被证明改变了什么的修复，不是修复。**
+
+### 而这一版把两次错误的猜测也记下来
+
+1. **`NAU_PYTHON: python3`** —— **它只存在于我写的注释里，从来不是原因** ✗
+2. **加 `CARGO_BUILD_JOBS: 2`** —— **本身正确且保留，但不是原因** ✗
+
+**两次都是在没有证据的情况下动手，而两次都犯了本仓库反复记录的那个错：
+对没人检查过的环境作出断言。**
+
+### 而 CI 步骤现在**带着真因**回到 `ci.yml`
+
+`verify-all.mjs` **重新进入 CI** ✓ —— 而这一次它有了被证明的原因说明，
+**而不是一段「试过了，失败了，撤掉了」的历史** ✓
+
+### 验证
+
+| | |
+|---|---|
+| 修复证明 | **修复前逐字复现 CI 报错、修复后 `CHILD-RAN-OK`** ✓ |
+| 本地全量 | **24 通过 / 0 失败 / 1 跳过**，退出码 0 ✓ |
+| `doc-counts` | 13 条一致（25 道关卡、59 项部署检查）✓ |
+| `version-consistency` | `VERSION = 3.9.11`，与 workspace 一致 ✓ |
+| 工作区测试 | **2006 passed, 0 failed** ✓ |
+| 部署检查 | **59 passed, 0 failed** ✓ |
+
 ## [3.9.10] — 修复 v3.9.9 的两个 P0：**一个文件因为否定规则没实现而没进仓库，而 CI 从没跑过关卡**
 
 **这是 v3.9.9 发布后自查发现的**。v3.9.9 的 CI 五条流水线三平台**全绿** ——

@@ -150,46 +150,75 @@ jobs:
           NAU_PROFILE: debug
 
       # ---------------------------------------------------------------------------------------
-      # A STEP THAT WAS ADDED AND THEN REMOVED, WITH THE REASON RECORDED
+      # A STEP THAT WAS ADDED, FAILED, WAS REMOVED, AND IS NOW RE-ADDED WITH THE CAUSE FIXED
       # ---------------------------------------------------------------------------------------
       #
-      # v3.9.9 shipped a release commit that silently omitted `.env.example`, and the `env-template`
-      # gate that reads that file had never run in CI. The obvious fix was to add
+      # v3.9.9 shipped a release commit that added `Dockerfile`, `docker-compose.yml`,
+      # `.dockerignore` and `Makefile` -- and SILENTLY OMITTED `.env.example`. Two independent gaps
+      # had to line up:
       #
-      #     run: node scripts/verify-all.mjs
+      #   1. `scripts/compute-changeset.mjs` decides what to publish by reading `.gitignore`, and its
+      #      matcher did not implement the `!` negation. `.env.*` therefore matched the template and
+      #      `!.env.example` was invisible to it.
+      #   2. **CI never ran `scripts/verify-all.mjs`.** The 25-gate suite -- including `env-template`,
+      #      which READS `.env.example` -- passed on a developer's machine and was never executed
+      #      here. A check that only ever runs where its author happens to work is not a check, it is
+      #      a habit.
       #
-      # to this job. It was added, and it FAILED on all three platforms -- and after two rounds of
-      # diagnosis it was still failing the same way:
+      # (1) is fixed in the changeset tool. (2) is this step.
       #
-      #   * all eight Windows gate failures report `operable program or batch file.` in 0.0-0.1s,
-      #     which is cmd's message for a program it cannot find;
-      #   * `Production code has no panic path` reports `0 site(s)` -- the gate RAN and scanned
-      #     nothing, which is not the same failure as a missing tool;
-      #   * the gates that fail here (`conformance`, `javascript`, `deploy`) PASS in their own jobs
-      #     in this same workflow: `verify / conformance`, `verify / javascript`, `verify / libp2p`
-      #     are all green while the identical checks fail from inside this step.
+      # # WHY THE FIRST ATTEMPT FAILED
       #
-      # That last row is the important one. The same check passes in one job and fails in another,
-      # so the difference is the job's environment rather than the check -- and the honest state of
-      # the diagnosis is that it is NOT yet known which part of that environment.
+      # The step was added once before and failed on all three platforms, reporting `operable program
+      # or batch file.` for nine gates in under a tenth of a second. It was then REMOVED with the
+      # reason recorded, because a red default branch is worse than a documented gap -- and the
+      # diagnosis was resumed with the actual job log instead of more guesses. Two earlier guesses
+      # (`NAU_PYTHON: python3`, then `CARGO_BUILD_JOBS`) had both been wrong.
       #
-      # So the step is REMOVED rather than left failing. A red `main` is worse than a documented
-      # gap: it makes every later signal untrustworthy, and `main` was green before this step was
-      # added. The gap it was meant to close is real and is recorded here rather than lost:
+      # The cause was in `verify-all.mjs`, not in this workflow. `run()` spawns through `cmd` on
+      # Windows, and `cmd` splits its command line on spaces. `NODE` is `process.execPath`, which on a
+      # GitHub Windows runner is `C:\Program Files\nodejs\node.exe`. So `cmd` was asked to run
+      # `C:\Program`, and answered:
       #
-      #   **`verify-all.mjs` still does not run in CI. The 25 gates run on a developer's machine.**
+      #     'C:\Program' is not recognized as an internal or external command,
+      #     operable program or batch file.
       #
-      # The next attempt should not guess. `verify-all.mjs` needs to be run in a job whose
-      # environment matches the jobs where its checks DO pass -- same runner image, same setup
-      # steps, same working directory -- and the first thing to establish is what those jobs have
-      # that this one does not. Two speculative fixes have already been tried:
+      # That explains every symptom that made the failure look arbitrary:
       #
-      #   1. removing `NAU_PYTHON: python3` (which turned out to exist only in a comment, so it was
-      #      never the cause);
-      #   2. adding `CARGO_BUILD_JOBS: 2` (correct on its own terms and kept, but not the cause).
+      #   * exactly the gates that spawn `NODE` failed; gates spawning `cargo` or `python3` passed,
+      #     because those commands contain no space;
+      #   * gates that spawn nothing passed -- they are pure JavaScript;
+      #   * `Production code has no panic path` reported `0 site(s)` rather than an error, because the
+      #     child started with the wrong argv and scanned nothing. A gate that RUNS and finds zero
+      #     sites reads as a finding, not as a broken invocation;
+      #   * it never reproduced locally, because a developer's node lives at a path without spaces.
       #
-      # Neither was based on evidence, and both were the same mistake this repository keeps
-      # recording: an assertion about an environment nobody had inspected.
+      # `scripts/verify-all.mjs` now quotes the command AND every argument when the shell will parse
+      # them, and leaves anything without a space untouched. Quoting only the executable was not
+      # enough: the proof showed the child then failing with `Cannot find module '<prefix>'` -- the
+      # same split, one token later.
+      #
+      # The fix is proven by a reproduction that CREATES the condition -- copying the interpreter to a
+      # path containing a space -- which shows the identical `not recognized` message before the
+      # change and a successful child after it.
+      #
+      # `CARGO_BUILD_JOBS` is set because it is the one variable this repository documents as
+      # load-bearing rather than convenient: a parallel build of the 18-crate workspace can exhaust a
+      # runner's memory, and it does so SILENTLY. `docs/DEPLOYMENT.md` records that as an incident.
+      #
+      # `--allow-missing-tools` is deliberately NOT passed: a gate whose tool is absent reports SKIP,
+      # and this script's standing position is that **missing tooling is "not verified", not
+      # "passed"**. On a runner a SKIP means something is genuinely wrong.
+      #
+      # Runs on all three platforms because several gates read platform behaviour on purpose --
+      # `cross-target`, `unsafe-containment` and `defence-in-depth` ask what the platform provides
+      # rather than assuming Linux. That is also why some gates SKIP here, and they are listed as NOT
+      # VERIFIED rather than hidden.
+      - name: Document and artifact gates (verify-all.mjs)
+        run: node scripts/verify-all.mjs
+        env:
+          CARGO_BUILD_JOBS: 2
+
   python:
     name: python
     runs-on: ubuntu-latest

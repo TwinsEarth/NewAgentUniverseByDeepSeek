@@ -62,11 +62,45 @@ function have(cmd) {
 
 function run(cmd, args, opts = {}) {
   const started = Date.now();
-  const r = spawnSync(cmd, args, {
+  // On Windows this runs through `cmd`, because `spawnSync` cannot execute a `.mjs` or a `.cmd`
+  // directly. That was correct for the reason it was added and wrong in a way nobody saw for
+  // several releases, and the failure is worth writing down because it is invisible locally:
+  //
+  //   `cmd` splits its command line on spaces. `NODE` is `process.execPath`, which on a GitHub
+  //   Windows runner is `C:\Program Files\nodejs\node.exe`. So `cmd` was asked to run
+  //   `C:\Program`, and answered `'C:\Program' is not recognized as an internal or external
+  //   command, operable program or batch file.` -- which is the string that appeared as the detail
+  //   of nine failing gates and read like a missing tool.
+  //
+  // The blast radius was exactly the gates that spawn `NODE`, which is why it looked arbitrary:
+  //
+  //   * gates that spawn `cargo` or `python3` PASSED -- those commands have no space in them;
+  //   * gates that spawn nothing PASSED -- they are pure JavaScript;
+  //   * `Production code has no panic path` reported `0 site(s)` rather than an error, because the
+  //     child process started with the wrong argv and scanned nothing. A gate that runs and finds
+  //     zero sites looks like a finding, not like a broken invocation.
+  //
+  // And it never reproduced locally: a developer's node lives at a path without spaces -- here,
+  // `C:\Users\...\node\node.exe` -- so the same code passed on every machine its author used. That
+  // is the same shape as everything else this repository has recorded: a check that only ever runs
+  // where its author happens to work.
+  //
+  // The fix quotes the command AND every argument, because `cmd` splits the whole command line on
+  // spaces -- quoting only the executable moves the breakage to the first argument. The proof is in
+  // the reproduction: with the command alone quoted, the child started and then reported
+  // `Cannot find module 'E:\DS\_work\spaced'`, which is the SAME split, one token later.
+  //
+  // Quoting is applied only when needed and only on Windows, so nothing else about the invocation
+  // changes. `cargo`, `python3` and every relative script path are left exactly as they were.
+  const quoteIfNeeded = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const useShell = process.platform === 'win32';
+  const shellCmd = useShell ? quoteIfNeeded(cmd) : cmd;
+  const shellArgs = useShell ? args.map(quoteIfNeeded) : args;
+  const r = spawnSync(shellCmd, shellArgs, {
     cwd: opts.cwd ? path.join(ROOT, opts.cwd) : ROOT,
     encoding: 'utf8',
     env,
-    shell: process.platform === 'win32',
+    shell: useShell,
     maxBuffer: 64 * 1024 * 1024,
   });
   return {
