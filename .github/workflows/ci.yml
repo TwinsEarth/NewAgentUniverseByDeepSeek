@@ -240,6 +240,21 @@ jobs:
         # the dependency graph compiles C for the target, so a target's std alone is not enough and
         # `cc-rs` fails with `command did not [run]`. Adding the target without a toolchain turned a
         # SKIP into a FAIL, and the fix is a toolchain rather than a narrower gate.
+        #
+        # * * * `shell: bash` IS NOT DECORATION * * *
+        #
+        # The first version of this step omitted it and used `if [ ... ]; then` -- bash syntax -- so
+        # the Windows runner handed the script to PowerShell, which answered
+        #
+        #     ParserError: ...ps1:4
+        #        4 |  if [ "$RUNNER_OS" = "Linux" ]; then
+        #          |    ~
+        #          | Missing '(' after 'if' in if statement.
+        #
+        # on the LAST step before the gates, after nine jobs had already gone green. Naming the shell
+        # explicitly is what makes one script run the same way on all three runners; the platform
+        # difference is then handled inside the script by `$RUNNER_OS`, which both shells provide.
+        shell: bash
         run: |
           rustup target add x86_64-unknown-linux-gnu
           rustup target add x86_64-pc-windows-msvc
