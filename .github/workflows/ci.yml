@@ -79,6 +79,31 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    # * * * ONE DEFAULT INSTEAD OF A RULE EVERY STEP HAS TO REMEMBER * * *
+    #
+    # This job's steps already carried `shell: bash` individually, and the comments on them explain
+    # why: the Windows runner defaults to PowerShell, where `> /dev/null` resolves to `D:\dev\null`,
+    # and bash line continuations and `if [ ... ]; then` are syntax errors.
+    #
+    # Individually was the problem. Two steps added in this same sequence forgot it, and each one
+    # cost a full CI cycle to find:
+    #
+    #   * `Add the cross-compilation targets` -- `if [ "$RUNNER_OS" = "Linux" ]; then` handed to
+    #     PowerShell, which answered `Missing '(' after 'if' in if statement.`
+    #   * `Fetch forge-std` -- a `git clone ... \` continuation handed to PowerShell, which read the
+    #     URL on the next line as a command name:
+    #         The term 'https://github.com/foundry-rs/forge-std' is not recognized...
+    #
+    # Both failures landed on the LAST steps before the gates, after nine other jobs had gone green,
+    # so each looked like a new problem rather than the same one twice.
+    #
+    # The default makes the class of mistake impossible rather than merely corrected: a step added
+    # later gets bash without its author knowing this history. Bash is present on all three runners --
+    # Git Bash on Windows -- and `$RUNNER_OS` is set by both shells, so a step that needs to know the
+    # platform can still ask.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
