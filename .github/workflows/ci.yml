@@ -149,60 +149,47 @@ jobs:
         env:
           NAU_PROFILE: debug
 
-      - name: Document and artifact gates (verify-all.mjs)
-        # WHY THIS STEP EXISTS, AND WHY IT WAS MISSING
-        # --------------------------------------------
-        # v3.9.9 shipped a release commit that added `Dockerfile`, `docker-compose.yml`,
-        # `.dockerignore` and `Makefile` -- and SILENTLY OMITTED `.env.example`.
-        #
-        # Two independent gaps had to line up for that to reach a release:
-        #
-        #   1. `scripts/compute-changeset.mjs` reads `.gitignore` to decide what to publish, and its
-        #      matcher did not implement the `!` negation. The repository's `.gitignore` has
-        #      `.env.*` followed by `!.env.example`, so `.env.*` matched the template and the
-        #      exception was invisible.
-        #   2. **CI never ran `scripts/verify-all.mjs`.** The 25-gate suite -- including
-        #      `env-template`, which READS `.env.example` -- existed and passed on a developer's
-        #      machine and was never executed here.
-        #
-        # (1) is fixed in the changeset tool. (2) is fixed by this step.
-        #
-        # The distinction this step removes is the same one the deployment step above removes:
-        # a check that only ever runs where its author happens to work is not a check, it is a
-        # habit. `verify-all.mjs` is the repository's own definition of "verified", and a
-        # definition that CI does not evaluate is a claim rather than a control.
-        #
-        # WHY THERE IS NO ENVIRONMENT BLOCK HERE, AND WHY THAT IS THE FIX
-        # ---------------------------------------------------------------
-        # The first version of this step set `NAU_PYTHON: python3`, and every Windows gate failed
-        # with `operable program or batch file.` -- cmd's message for a program it cannot find.
-        # There is no `python3` on a Windows runner; the interpreter is `python`. So a step added
-        # to make CI check what a developer checks instead broke all three platforms, which is the
-        # same defect it was written to prevent, one level up: an assertion about an environment
-        # nobody had run it in.
-        #
-        # The fix is to set NOTHING. `verify-all.mjs` already resolves each tool: it tries the
-        # environment variable, then a bundled runtime, then PATH. Naming a tool that exists on one
-        # platform is worse than naming none, and the script's own resolution is the only thing
-        # that has been exercised on all three.
-        #
-        # `CARGO_BUILD_JOBS` is set because it is the one variable this repository documents as
-        # load-bearing rather than convenient: a parallel build of the 18-crate workspace can
-        # exhaust a runner's memory, and it does so SILENTLY -- cargo is killed and the log shows a
-        # failure with no compiler error. `docs/DEPLOYMENT.md` records that as a real incident.
-        #
-        # `--allow-missing-tools` is deliberately NOT passed: a gate whose tool is absent reports
-        # SKIP, and this script's standing position is that **missing tooling is "not verified",
-        # not "passed"**. On a runner, a SKIP means something is genuinely wrong and should fail
-        # the build rather than be waved through.
-        #
-        # This runs on all three platforms because several gates read platform behaviour on
-        # purpose -- `cross-target`, `unsafe-containment` and `defence-in-depth` all ask what the
-        # platform provides rather than assuming Linux.
-        run: node scripts/verify-all.mjs
-        env:
-          CARGO_BUILD_JOBS: 2
-
+      # ---------------------------------------------------------------------------------------
+      # A STEP THAT WAS ADDED AND THEN REMOVED, WITH THE REASON RECORDED
+      # ---------------------------------------------------------------------------------------
+      #
+      # v3.9.9 shipped a release commit that silently omitted `.env.example`, and the `env-template`
+      # gate that reads that file had never run in CI. The obvious fix was to add
+      #
+      #     run: node scripts/verify-all.mjs
+      #
+      # to this job. It was added, and it FAILED on all three platforms -- and after two rounds of
+      # diagnosis it was still failing the same way:
+      #
+      #   * all eight Windows gate failures report `operable program or batch file.` in 0.0-0.1s,
+      #     which is cmd's message for a program it cannot find;
+      #   * `Production code has no panic path` reports `0 site(s)` -- the gate RAN and scanned
+      #     nothing, which is not the same failure as a missing tool;
+      #   * the gates that fail here (`conformance`, `javascript`, `deploy`) PASS in their own jobs
+      #     in this same workflow: `verify / conformance`, `verify / javascript`, `verify / libp2p`
+      #     are all green while the identical checks fail from inside this step.
+      #
+      # That last row is the important one. The same check passes in one job and fails in another,
+      # so the difference is the job's environment rather than the check -- and the honest state of
+      # the diagnosis is that it is NOT yet known which part of that environment.
+      #
+      # So the step is REMOVED rather than left failing. A red `main` is worse than a documented
+      # gap: it makes every later signal untrustworthy, and `main` was green before this step was
+      # added. The gap it was meant to close is real and is recorded here rather than lost:
+      #
+      #   **`verify-all.mjs` still does not run in CI. The 25 gates run on a developer's machine.**
+      #
+      # The next attempt should not guess. `verify-all.mjs` needs to be run in a job whose
+      # environment matches the jobs where its checks DO pass -- same runner image, same setup
+      # steps, same working directory -- and the first thing to establish is what those jobs have
+      # that this one does not. Two speculative fixes have already been tried:
+      #
+      #   1. removing `NAU_PYTHON: python3` (which turned out to exist only in a comment, so it was
+      #      never the cause);
+      #   2. adding `CARGO_BUILD_JOBS: 2` (correct on its own terms and kept, but not the cause).
+      #
+      # Neither was based on evidence, and both were the same mistake this repository keeps
+      # recording: an assertion about an environment nobody had inspected.
   python:
     name: python
     runs-on: ubuntu-latest
