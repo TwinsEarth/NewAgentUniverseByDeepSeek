@@ -241,7 +241,21 @@ jobs:
           rustup target add x86_64-pc-windows-msvc
 
       - name: Install Foundry (the contracts-build and contracts-test gates)
-        uses: foundry-rs/foundry-toolchain@b3b07ba8b418998c39fb20f9d8b27520de0a4797 # v1
+        # The SAME pin the `contracts` job above already uses. That is the whole point of this
+        # comment: the first version of this step carried a 40-character SHA I wrote from memory, and
+        # the runner answered, in `Set up job` and before a single line of this job ran,
+        #
+        #     ##[error]Unable to resolve action `foundry-rs/foundry-toolchain@b3b07ba8...`,
+        #     unable to find version `b3b07ba8...`
+        #
+        # on all three platforms at once. The real SHA was already in this file -- in the `contracts`
+        # job -- and the correct action was to copy it rather than to produce one. Verified against
+        # the API afterwards: my invented SHA returns 404, and this one resolves.
+        #
+        # Pinning by SHA is what this workflow does, and it is the right thing to do. The lesson is
+        # about WHERE the SHA comes from: a value that is typed is a guess, and a value that is read
+        # out of a file or an API is a fact.
+        uses: foundry-rs/foundry-toolchain@de808b1eea699e761c404bda44ba8f21aba30b2c # v1.3.1
         with:
           version: stable
 
