@@ -304,19 +304,37 @@ jobs:
             clang llvm-dev lld libssl-dev libxml2-dev zlib1g-dev libzstd-dev xz-utils
 
           # The SDK, and its published checksum, from the same release.
+          #
+          # * * * THE FILE KEEPS ITS PUBLISHED NAME, AND THAT IS THE POINT * * *
+          #
+          # The first version of this step downloaded the archive to `/tmp/sdk.tar.xz` -- a shorter,
+          # tidier name -- and then verified it with
+          #
+          #     ( cd /tmp && grep "MacOSX${SDK_VERSION}.sdk.tar.xz" sdk.sha256sum.txt | sha256sum -c - )
+          #
+          # which asks `sha256sum` to open `MacOSX15.5.sdk.tar.xz`. That file did not exist, because
+          # the only file in `/tmp` was called `sdk.tar.xz`. The gate failed with
+          #
+          #     sha256sum: MacOSX15.5.sdk.tar.xz: No such file or directory
+          #     MacOSX15.5.sdk.tar.xz: FAILED open or read
+          #
+          # Renaming a file and then checking it against its original name is a mistake with no
+          # upside: the checksum file is written by the publisher and names the artefact it covers,
+          # so the download is now stored under exactly that name and nothing has to be reconciled.
           BASE="https://github.com/joseluisq/macosx-sdks/releases/download/${SDK_VERSION}"
-          curl -fsSL -o /tmp/sdk.tar.xz        "${BASE}/MacOSX${SDK_VERSION}.sdk.tar.xz"
-          curl -fsSL -o /tmp/sdk.sha256sum.txt "${BASE}/sha256sum.txt"
+          SDK_FILE="MacOSX${SDK_VERSION}.sdk.tar.xz"
+          curl -fsSL -o "/tmp/${SDK_FILE}"        "${BASE}/${SDK_FILE}"
+          curl -fsSL -o /tmp/sdk.sha256sum.txt    "${BASE}/sha256sum.txt"
 
           # * * * VERIFY BEFORE EXTRACTING * * *
           # `sha256sum -c` reads the published file; if the archive does not match, this fails here
           # rather than producing a toolchain from bytes nobody checked.
-          ( cd /tmp && grep "MacOSX${SDK_VERSION}.sdk.tar.xz" sdk.sha256sum.txt | sha256sum -c - )
+          ( cd /tmp && grep "${SDK_FILE}" sdk.sha256sum.txt | sha256sum -c - )
 
           git clone --filter=blob:none https://github.com/tpoechtrager/osxcross /tmp/osxcross
           cd /tmp/osxcross
           git checkout "${OSXCROSS_COMMIT}"
-          cp /tmp/sdk.tar.xz "tarballs/MacOSX${SDK_VERSION}.sdk.tar.xz"
+          cp "/tmp/${SDK_FILE}" "tarballs/${SDK_FILE}"
 
           # `UNATTENDED=1` so `build.sh` does not prompt for a flavour; the default is `stable`.
           UNATTENDED=1 TARGET_DIR=/opt/osxcross ./build.sh
