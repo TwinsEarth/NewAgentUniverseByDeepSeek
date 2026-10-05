@@ -172,20 +172,36 @@ jobs:
         # habit. `verify-all.mjs` is the repository's own definition of "verified", and a
         # definition that CI does not evaluate is a claim rather than a control.
         #
+        # WHY THERE IS NO ENVIRONMENT BLOCK HERE, AND WHY THAT IS THE FIX
+        # ---------------------------------------------------------------
+        # The first version of this step set `NAU_PYTHON: python3`, and every Windows gate failed
+        # with `operable program or batch file.` -- cmd's message for a program it cannot find.
+        # There is no `python3` on a Windows runner; the interpreter is `python`. So a step added
+        # to make CI check what a developer checks instead broke all three platforms, which is the
+        # same defect it was written to prevent, one level up: an assertion about an environment
+        # nobody had run it in.
+        #
+        # The fix is to set NOTHING. `verify-all.mjs` already resolves each tool: it tries the
+        # environment variable, then a bundled runtime, then PATH. Naming a tool that exists on one
+        # platform is worse than naming none, and the script's own resolution is the only thing
+        # that has been exercised on all three.
+        #
+        # `CARGO_BUILD_JOBS` is set because it is the one variable this repository documents as
+        # load-bearing rather than convenient: a parallel build of the 18-crate workspace can
+        # exhaust a runner's memory, and it does so SILENTLY -- cargo is killed and the log shows a
+        # failure with no compiler error. `docs/DEPLOYMENT.md` records that as a real incident.
+        #
         # `--allow-missing-tools` is deliberately NOT passed: a gate whose tool is absent reports
         # SKIP, and this script's standing position is that **missing tooling is "not verified",
-        # not "passed"**. On a GitHub runner the tools it needs are either present or installed by
-        # the steps above, so a SKIP here means something is genuinely wrong and should fail the
-        # build rather than be waved through.
+        # not "passed"**. On a runner, a SKIP means something is genuinely wrong and should fail
+        # the build rather than be waved through.
         #
         # This runs on all three platforms because several gates read platform behaviour on
         # purpose -- `cross-target`, `unsafe-containment` and `defence-in-depth` all ask what the
         # platform provides rather than assuming Linux.
         run: node scripts/verify-all.mjs
         env:
-          # `verify-all.mjs` resolves the interpreter from these before falling back to a bundled
-          # one; the runner has python3 on PATH.
-          NAU_PYTHON: python3
+          CARGO_BUILD_JOBS: 2
 
   python:
     name: python
