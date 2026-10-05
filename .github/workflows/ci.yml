@@ -417,6 +417,28 @@ jobs:
         with:
           version: stable
 
+      - name: Fetch forge-std (the Solidity dependency the contracts gates need)
+        # Installing Foundry is not enough, and the run that proved it said so precisely:
+        #
+        #     Contracts compile (forge build --sizes)  SKIP  contracts/lib/forge-std is absent (the
+        #     only external dependency, not vendored); fetch it with:
+        #     git clone --depth 1 --branch v1.9.4 https://github.com/foundry-rs/forge-std ...
+        #
+        # `contracts/lib/` is gitignored -- the dependency is fetched rather than committed, which is
+        # the normal Foundry arrangement and the reason `.gitignore` names it. So a CI job that wants
+        # the contract gates to RUN rather than SKIP has to fetch it, and the version comes from the
+        # gate's own message rather than from a number chosen here.
+        #
+        # `--depth 1 --branch v1.9.4` so this is a shallow clone of a pinned tag: it fetches what the
+        # tests compile against and nothing else, and a floating branch would make the gate depend on
+        # whatever the dependency published most recently.
+        run: |
+          git clone --depth 1 --branch v1.9.4 \
+            https://github.com/foundry-rs/forge-std contracts/lib/forge-std
+          test -f contracts/lib/forge-std/src/Test.sol || {
+            echo "forge-std cloned but src/Test.sol is not where the tests import it from"; exit 1; }
+          echo "forge-std ready at $(git -C contracts/lib/forge-std rev-parse --short HEAD)"
+
       - name: Install the DSH integration's dependencies (the dsh-bundle gate)
         # `--frozen-lockfile` so CI installs the lockfile that is committed rather than resolving a
         # new one; a gate that passes against a dependency tree nobody committed is not evidence.
@@ -427,7 +449,29 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Document and artifact gates (verify-all.mjs)
-        run: node scripts/verify-all.mjs
+        # * * * THE ONE PLATFORM-SPECIFIC LINE IN THIS STEP * * *
+        #
+        # On Linux, `cross-target` checks the macOS target for real: an osxcross toolchain is built
+        # earlier in this job and `CC_x86_64_apple_darwin` points at it. On Windows and macOS there is
+        # no equivalent -- osxcross supports **Linux and *BSD hosts only**, which was known and
+        # accepted when this approach was chosen -- so the gate reports the macOS target as not
+        # installed.
+        #
+        # `--allow-skips=cross-target` names that ONE gate. It does not weaken the others and it does
+        # not hide the skip: `verify-all.mjs` still prints it, in its own NOT VERIFIED ON THIS PLATFORM
+        # section, because the answer is still "not verified". What changes is only whether an
+        # accepted limitation of the platform fails the build.
+        #
+        # This is deliberately NOT `--allow-missing-tools`, which would wave through every skip at
+        # once -- including ones nobody has thought about yet, which is exactly how a real gap becomes
+        # a quiet line.
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            node scripts/verify-all.mjs
+          else
+            node scripts/verify-all.mjs --allow-skips=cross-target
+          fi
         env:
           CARGO_BUILD_JOBS: 2
 

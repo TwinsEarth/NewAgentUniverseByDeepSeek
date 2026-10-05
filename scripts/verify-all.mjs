@@ -30,6 +30,25 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const argv = process.argv.slice(2);
 const allowMissing = argv.includes('--allow-missing-tools');
 const quick = argv.includes('--quick');
+// `--allow-skips=<id,id>`: name the gates whose SKIP is an ACCEPTED limitation of this platform,
+// rather than a missing tool on it.
+//
+// The distinction matters and is the reason this is a list of ids rather than another blanket flag.
+// `--allow-missing-tools` says "a tool is absent, take the exit code down a notch" -- it hides every
+// skip at once. This says "THIS gate cannot answer on THIS platform, and that was decided in
+// advance" -- and it still prints the gate in the NOT VERIFIED list, because the answer is still not
+// verified. What changes is only whether it fails the build.
+//
+// The case that needed it: `cross-target` asks the workspace to type-check for the other two
+// platforms. On Linux, `x86_64-apple-darwin` is now checked for real with an osxcross toolchain. On
+// Windows and macOS there is no equivalent -- osxcross supports Linux and *BSD hosts only -- so the
+// gate reports the macOS target as not installed. CI names it there and nowhere else.
+const allowSkips = (() => {
+  const arg = argv.find((a) => a.startsWith('--allow-skips'));
+  if (!arg) return new Set();
+  const value = arg.includes('=') ? arg.split('=')[1] : argv[argv.indexOf(arg) + 1] || '';
+  return new Set(value.split(',').map((s) => s.trim()).filter(Boolean));
+})();
 const onlyArg = argv.find((a) => a.startsWith('--only'));
 const only = onlyArg ? (onlyArg.split('=')[1] || argv[argv.indexOf(onlyArg) + 1] || '').split(',').filter(Boolean) : null;
 
@@ -1100,13 +1119,29 @@ const passed = results.filter((r) => r.state === 'PASS');
 
 console.log(`\n${passed.length} passed, ${failed.length} failed, ${skipped.length} skipped`);
 if (skipped.length) {
+  // Every skip is printed, including the allowed ones. `--allow-skips` changes whether a named skip
+  // FAILS THE BUILD, not whether it is reported -- because the answer is still "not verified", and a
+  // reader has to be told that either way. Hiding an accepted skip would turn a documented limitation
+  // into a silent one, which is the thing this whole family of flags exists to avoid.
+  const accepted = skipped.filter((s) => allowSkips.has(s.id));
+  const unaccepted = skipped.filter((s) => !allowSkips.has(s.id));
   console.log('\nNOT VERIFIED (this is a finding, not a pass):');
-  for (const s of skipped) console.log(`  - ${s.title}: ${s.detail}`);
+  for (const s of unaccepted) console.log(`  - ${s.title}: ${s.detail}`);
+  if (accepted.length) {
+    console.log('\nNOT VERIFIED ON THIS PLATFORM, AND ACCEPTED (named by --allow-skips):');
+    for (const s of accepted) {
+      console.log(`  - [${s.id}] ${s.title}: ${s.detail}`);
+    }
+  }
 }
 if (failed.length) {
   console.log('\nFAILED:');
   for (const f of failed) console.log(`  - ${f.title}: ${f.detail}`);
 }
 
-const skipsAreFatal = skipped.length > 0 && !allowMissing;
+// A skip fails the build unless it was named in `--allow-skips` or the caller waved every skip
+// through with `--allow-missing-tools`. The count of UNACCEPTED skips is what matters, so an accepted
+// one does not smuggle in a second, unnamed one alongside it.
+const unacceptedSkips = skipped.filter((s) => !allowSkips.has(s.id));
+const skipsAreFatal = unacceptedSkips.length > 0 && !allowMissing;
 process.exit(failed.length > 0 || skipsAreFatal ? 1 : 0);
