@@ -31,8 +31,14 @@ build/
 *.snapshot
 
 # Secrets — never commit credentials
+#
+# `.env.*` matches `.env.example` too, which is why this audit found the example file
+# un-committable: a template with no secrets in it was being ignored by the rule meant to protect
+# real ones. The negation below is the fix, and it is deliberately narrow — it re-includes ONLY the
+# exact name `.env.example`, so `.env.local`, `.env.production` and every other variant stay ignored.
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 !_test_keys/**

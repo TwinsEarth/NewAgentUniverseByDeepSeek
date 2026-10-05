@@ -1,0 +1,266 @@
+# NewAgentUniverseByDeepSeek — three topologies, and the honest notes for each.
+#
+#   docker compose up --build                     # single node (default)
+#   docker compose --profile kernel up --build    # single node + kernel enforcement
+#   docker compose --profile p2p up --build       # two nodes with a real libp2p swarm
+#
+# # THERE IS NO DATABASE, NO CACHE AND NO MIDDLEWARE HERE, AND THAT IS THE ARCHITECTURE
+#
+# The node's state is a DIRECTORY: `nau-ledger` keeps exact integer balances in a file store, and
+# `nau-store` is a file store. A compose file that invented a database service would be describing a
+# different system.
+#
+# ============================================================================
+# THE DEFAULT SERVICE
+# ============================================================================
+#
+# # WHAT IT DOES NOT DO
+#
+# The sandbox's kernel-level enforcement (AppArmor, eBPF) needs privileges a default container does
+# not have. The code reports that as `EnforcementSupport::Refused { reason }` rather than degrading
+# silently -- a standing rule of this repository, checked by the `defence-in-depth` gate -- so in
+# THIS service those mechanisms report themselves unavailable, and the node runs.
+#
+# The `kernel` profile below is the opt-in for a deployment that needs them and accepts the cost.
+
+services:
+  nau:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # A parallel build of this workspace can exhaust memory on a small machine, and it does so
+        # without an error. `docs/DEPLOYMENT.md` records that as a real incident.
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-2}"
+    image: nau:3.9.9
+    container_name: nau-node
+    restart: unless-stopped
+    ports:
+      # Bound to loopback on the HOST by default. Publishing a node's API on 0.0.0.0 is a decision
+      # about who may reach it, and it is not one this file should make silently.
+      - "127.0.0.1:4002:4002"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      # * * * THE VARIABLE THAT DECIDES WHETHER THIS WORKS * * *
+      #
+      # The container binds 0.0.0.0, so a request's Host header is whatever the caller sent, and the
+      # built-in policy refuses anything not listed here. With this unset the node accepts the
+      # connection and refuses the request, which reads as a networking fault rather than a policy
+      # one. The `Host` check exists because DNS rebinding reaches a loopback daemon through a
+      # hostname the browser resolves to 127.0.0.1.
+      NAU_API_HOSTS: "${NAU_API_HOSTS:-localhost,127.0.0.1,nau,nau-node}"
+      # Unset unless a browser client on another origin must call this node.
+      NAU_API_ORIGINS: "${NAU_API_ORIGINS:-}"
+      # * * * AND THE ONE THAT DECIDES WHO MAY WRITE * * *
+      #
+      # With this unset the node is READ-ONLY: it starts, `/health` answers, and every mutating
+      # route is refused. That is the correct default (`Authenticator::deny_all`) and it looks like
+      # a broken API to anyone who has not read it. Format: `id:token[:did][:scope,scope]`,
+      # entries separated by `;`. Generate a token rather than inventing one:
+      #     head -c 32 /dev/urandom | base64
+      NAU_API_TOKENS: "${NAU_API_TOKENS:-}"
+      # And the sandbox backend, which defaults to running NOTHING. Set it to `process` to execute.
+      # Any other value refuses to open a manager rather than selecting a weaker default.
+      NAU_SANDBOX_BACKEND: "${NAU_SANDBOX_BACKEND:-none}"
+    volumes:
+      # The state directory, as a NAMED volume rather than a bind mount: a named volume is created
+      # with the image's ownership (uid 10001), while a bind mount takes the host directory's owner
+      # and the non-root container user then cannot write to it. That failure is a permission denial
+      # on first write, well after a healthy start.
+      - nau-data:/var/lib/nau
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:4002/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    # The daemon stops its 26 plugins in order on shutdown. Compose's default 10s is not always
+    # enough for that, and a SIGKILL mid-shutdown is how a store ends up with a partial write.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # THE KERNEL-ENFORCEMENT PROFILE — opt in, and read the cost
+  # ==========================================================================
+  #
+  #   docker compose --profile kernel up
+  #
+  # # WHAT THIS BUYS
+  #
+  # With the capabilities below, `nau-sandbox`'s Linux enforcement path can engage where the kernel
+  # supports it. Where it does not, the code still reports a typed refusal -- this profile widens
+  # what is POSSIBLE, it does not make enforcement appear.
+  #
+  # # WHAT IT COSTS, STATED PLAINLY
+  #
+  # This container is now trusted with part of the host's kernel. `SYS_ADMIN` is a broad capability
+  # and a path-escape defect in a plugin stops being a container compromise and becomes a host one.
+  # That is the trade, and it is why this is a separate profile rather than the default: the
+  # default has to be the one that is safe to run without thinking.
+  #
+  # `seccomp=unconfined` is required for the syscalls the enforcement path makes. It also removes a
+  # layer of defence. If a deployment does not need kernel enforcement, do not use this profile.
+  nau-kernel:
+    profiles: ["kernel"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-2}"
+    image: nau:3.9.9
+    container_name: nau-node-kernel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4003:4002"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      NAU_API_HOSTS: "${NAU_API_HOSTS:-localhost,127.0.0.1,nau-kernel}"
+      NAU_API_TOKENS: "${NAU_API_TOKENS:-}"
+      NAU_SANDBOX_BACKEND: "${NAU_SANDBOX_BACKEND:-process}"
+    cap_add:
+      # The capabilities the enforcement path needs, named individually rather than handing over the
+      # whole kernel with `privileged: true`. Naming them is the point: a reader can see exactly
+      # what was granted, and a future change that needs one more is a visible diff.
+      - SYS_ADMIN          # mount namespaces and the LSM interfaces AppArmor is configured through
+      - SYS_PTRACE         # inspecting sandboxed child processes
+      - NET_ADMIN          # network namespace isolation for sandboxes
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    volumes:
+      - nau-data-kernel:/var/lib/nau
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # THE P2P PROFILE — two nodes with a real libp2p swarm
+  # ==========================================================================
+  #
+  #   docker compose --profile p2p up
+  #   curl http://127.0.0.1:4012/p2p/peers
+  #   curl http://127.0.0.1:4013/p2p/agents
+  #
+  # # * * * WHAT REPLICATES, AND WHAT DOES NOT * * *
+  #
+  # From `nau-p2p-daemon --help`, quoted rather than paraphrased because it is the single most
+  # important thing to know before running this profile:
+  #
+  #     Registered agent cards are gossiped to the room. A card is admitted only if its
+  #     Ed25519 signature verifies against the key that fingerprints its own DID.
+  #     Balances and settlement do NOT replicate: moving funds between nodes is a
+  #     consensus problem this build does not claim to have solved.
+  #
+  # So a two-node swarm here shares WHO EXISTS and refuses to share MONEY. A deployment expecting
+  # balances to follow agents across nodes will find that they do not, and the code says so before
+  # anyone discovers it the hard way.
+  #
+  # # THE THREE ARGUMENTS THAT MATTER
+  #
+  #   --room       GossipSub room. Nodes must share it to see each other.
+  #   --seed       64 hex characters: the identity seed for BOTH the did:nau: and the libp2p PeerId.
+  #                * These are development seeds and are in this file on purpose so that the profile
+  #                runs out of the box. They are PUBLIC. A real deployment generates its own and
+  #                keeps them out of a compose file, which is why they are passed as variables with
+  #                a default rather than hard-coded.
+  #   --bootstrap  the peer to dial. Node B dials node A by its compose service name.
+  p2p-a:
+    profiles: ["p2p"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-2}"
+    image: nau:3.9.9
+    container_name: nau-p2p-a
+    hostname: nau-p2p-a
+    restart: unless-stopped
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/nau-p2p-daemon"]
+    command:
+      - "--api-addr=0.0.0.0:4002"
+      - "--data-dir=/var/lib/nau"
+      - "--listen=/ip4/0.0.0.0/tcp/4001"
+      - "--room=${NAU_P2P_ROOM:-nau-dev}"
+      # DEV SEED — public, deterministic, for this profile only. Replace in any real deployment.
+      - "--seed=${NAU_P2P_SEED_A:-0101010101010101010101010101010101010101010101010101010101010101}"
+      - "--register-self"
+      - "--agent-name=node-a"
+    ports:
+      - "127.0.0.1:4012:4002"   # HTTP API
+      - "4001:4001"             # swarm listen port
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      NAU_API_HOSTS: "${NAU_API_HOSTS:-localhost,127.0.0.1,nau-p2p-a}"
+      NAU_API_TOKENS: "${NAU_API_TOKENS:-}"
+    volumes:
+      - nau-p2p-a:/var/lib/nau
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:4002/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    stop_grace_period: 30s
+
+  p2p-b:
+    profiles: ["p2p"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-2}"
+    image: nau:3.9.9
+    container_name: nau-p2p-b
+    hostname: nau-p2p-b
+    restart: unless-stopped
+    depends_on:
+      # Node B dials node A, so A must be up first. `service_started` rather than `service_healthy`
+      # is deliberate: libp2p re-dials, so a B that starts before A is listening still converges.
+      # Waiting for health would make the pair fail to start whenever A is slow, for no benefit.
+      - p2p-a
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/nau-p2p-daemon"]
+    command:
+      - "--api-addr=0.0.0.0:4002"
+      - "--data-dir=/var/lib/nau"
+      - "--listen=/ip4/0.0.0.0/tcp/4001"
+      - "--room=${NAU_P2P_ROOM:-nau-dev}"
+      # DEV SEED — a DIFFERENT one from node A, because two nodes sharing a seed share an identity
+      # and the swarm would see one peer rather than two.
+      - "--seed=${NAU_P2P_SEED_B:-0202020202020202020202020202020202020202020202020202020202020202}"
+      # Dial A by its compose service name. This is the DNS name Compose gives the container on the
+      # default network, and it is why the two services need no fixed IPs.
+      - "--bootstrap=/dns4/nau-p2p-a/tcp/4001"
+      - "--register-self"
+      - "--agent-name=node-b"
+    ports:
+      - "127.0.0.1:4013:4002"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      NAU_API_HOSTS: "${NAU_API_HOSTS:-localhost,127.0.0.1,nau-p2p-b}"
+      NAU_API_TOKENS: "${NAU_API_TOKENS:-}"
+    volumes:
+      - nau-p2p-b:/var/lib/nau
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:4002/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    stop_grace_period: 30s
+
+volumes:
+  nau-data:
+    name: nau-data
+  nau-data-kernel:
+    name: nau-data-kernel
+  nau-p2p-a:
+    name: nau-p2p-a
+  nau-p2p-b:
+    name: nau-p2p-b

@@ -237,3 +237,202 @@ $env:SOLC_BIN="E:\DS\_private\solc-0.8.24.exe"
 `verify-all.mjs` 的立场：**缺少工具是「未验证」，不是「通过」**。
 出现任何 `SKIP` 时退出码非 0（除非显式 `--allow-missing-tools`），
 并在结尾单独列出 `NOT VERIFIED` 清单。
+
+---
+
+## 7. 环境变量索引（v3.9.9 新增）
+
+**完整的、带语义说明的模板见仓库根的 `.env.example`** —— 那一份是**权威**，
+本节只是索引。两者的一致性由 **`env-template` 关卡**强制（见第 11 节）。
+
+### 7.1 运行时·安全（**先读这一组**）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `NAU_API_TOKENS` | **空 = 只读** | `id:token[:did][:scope,scope]`，`;` 分隔。**格式错误会让整个解析失败**（不跳过单条）|
+| `NAU_API_ALLOW_ANONYMOUS_WRITES` | 空 | `1` 允许匿名写入。**仅在同时绑定 loopback 时生效** |
+| `NAU_API_HOSTS` | 空 | Host 白名单，逗号分隔。**非 loopback 绑定时不设它 = 连接成功、请求被拒** |
+| `NAU_API_ORIGINS` | 空 | CORS 白名单。**无通配，恶意 Origin 永不回显** |
+
+> * * * 未配置 `NAU_API_TOKENS` 的节点是只读的。 * * *
+>
+> 它会启动、`GET /health` 返回 200、**而每个 `POST` 被拒**。
+> 这是 `Authenticator::deny_all` 的**正确**默认，**看起来像 API 坏了**。
+
+### 7.2 运行时·沙箱
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `NAU_SANDBOX_BACKEND` | **`none` = 什么都不跑** | `none` 或 `process`。**其他任何值拒绝打开 manager，不回退默认**——「安全设置里的笔误不得选中更弱的那个」|
+
+### 7.3 运行时·MCP 与日志
+
+| 变量 | 说明 |
+|---|---|
+| `NAU_MCP_TOKEN` | MCP 单密钥（**无 per-caller 身份**）|
+| `NAU_MCP_TOKENS` | MCP 令牌表，格式同 `NAU_API_TOKENS` |
+| `RUST_LOG` | 日志过滤 |
+
+### 7.4 **不是**环境变量的东西
+
+| 是命令行参数 | 说明 |
+|---|---|
+| `--api-addr <ADDR>` | 默认 `127.0.0.1:4002` |
+| `--api-port <PORT>` | `--api-addr 127.0.0.1:<PORT>` 的简写 |
+| `--data-dir <DIR>` | 默认 `nau-data`，支持 `~` |
+| `--ephemeral` | 全内存，不落盘 |
+| `--min-stake <AMOUNT>` | 注册 agent 的最低质押，默认 100 |
+| `--min-reputation-bps <N>` | 投标信誉下限，`0..=10000`，默认 0 |
+
+**没有 `NAU_DATA_DIR`，没有 `NAU_API_ADDR`**。列出来只会让人去找一个什么都不做的行为。
+
+## 8. 端口
+
+| 端口 | 谁用 | 说明 |
+|---|---|---|
+| **4002** | `nau-daemon` / `nau-p2p-daemon` 的 HTTP API | 默认绑 `127.0.0.1` |
+| **4001** | `nau-p2p-daemon` 的 libp2p swarm | 默认 `/ip4/0.0.0.0/tcp/4001` |
+
+**没有数据库端口、没有缓存端口、没有消息队列端口** —— 状态是一个目录。
+声明一个不存在的依赖会让部署者去找一个不需要装的东西。
+
+## 9. 进程管理：systemd
+
+```ini
+# /etc/systemd/system/nau-daemon.service
+[Unit]
+Description=NewAgentUniverseByDeepSeek node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nau
+Group=nau
+WorkingDirectory=/var/lib/nau
+
+# 环境变量从文件读，而不是写进这个 unit：
+# unit 文件是全世界可读的，凭据不该放在那里。
+EnvironmentFile=/etc/nau/nau.env
+
+ExecStart=/usr/local/bin/nau-daemon \
+    --api-addr 127.0.0.1:4002 \
+    --data-dir /var/lib/nau
+
+Restart=on-failure
+RestartSec=5s
+
+# * * * 给停机留时间 * * *
+# 守护进程要按顺序停 26 个插件。SIGKILL 打断关闭流程
+# 就是存储留下半截写入的方式。
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 加固：这个进程不需要写 /usr、不需要新特权
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nau
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# /etc/nau/nau.env —— 权限 0600，属主 nau
+install -d -m 0750 -o nau -g nau /etc/nau
+cat > /etc/nau/nau.env <<'EOF'
+NAU_API_TOKENS=ops:REPLACE_ME:read,write,admin
+NAU_SANDBOX_BACKEND=process
+RUST_LOG=info
+EOF
+chmod 0600 /etc/nau/nau.env
+chown nau:nau /etc/nau/nau.env
+
+systemctl daemon-reload
+systemctl enable --now nau-daemon
+systemctl status nau-daemon
+journalctl -u nau-daemon -f
+```
+
+## 10. 反向代理：Nginx
+
+```nginx
+# /etc/nginx/sites-available/nau
+server {
+    listen 443 ssl http2;
+    server_name nau.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/nau.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/nau.example.com/privkey.pem;
+
+    # * * * 必须传 Host，且必须与 NAU_API_HOSTS 一致 * * *
+    #
+    # 节点校验 Host 的理由是 DNS rebinding：一个浏览器解析到 127.0.0.1 的主机名
+    # 可以抵达 loopback 守护进程。所以代理转发时必须带上真实 Host，
+    # 而节点的 NAU_API_HOSTS 必须包含 nau.example.com。
+    location / {
+        proxy_pass http://127.0.0.1:4002;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 5s;
+    }
+
+    # 健康检查不记日志（每 30 秒一次会淹没日志）
+    location = /health {
+        access_log off;
+        proxy_pass http://127.0.0.1:4002/health;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+**部署后必须验证**（否则上面那段 `proxy_set_header Host` 是白写的）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://nau.example.com/health   # 期望 200
+# 如果 400/403：NAU_API_HOSTS 里没有 nau.example.com
+```
+
+## 11. 容器（v3.9.9 新增）
+
+三种拓扑，见仓库根的 `docker-compose.yml`：
+
+| 命令 | 得到什么 |
+|---|---|
+| `docker compose up --build` | **单节点**（默认）。**不含内核强制** |
+| `docker compose --profile kernel up` | 单节点 + **内核强制**（`cap_add` 精确授权，**不是 `privileged`**）|
+| `docker compose --profile p2p up` | **两个节点 + 真实 libp2p swarm** |
+
+### 11.1 容器**不**提供什么（写在最前面）
+
+**默认容器没有内核级强制**（AppArmor / eBPF 需要宿主权限）。
+代码会**如实报告 `Refused`** 而不是静默降级 —— 这是本仓库的常设规则，
+由 `defence-in-depth` 关卡守护 ✓
+
+**要内核强制就必须接受代价**：`kernel` profile 授予 `SYS_ADMIN`/`SYS_PTRACE`/`NET_ADMIN`
+并关闭 seccomp/apparmor。**此后一个插件的路径逃逸缺陷就是宿主失陷，而不是容器失陷。**
+**所以它必须是一个 opt-in 的 profile，默认的那个必须是不假思索也能安全运行的那个。**
+
+### 11.2 P2P profile 的**关键事实**
+
+`nau-p2p-daemon --help` 原文（**照抄，不转述**）：
+
+> Registered agent cards are gossiped to the room. A card is admitted only if its
+> Ed25519 signature verifies against the key that fingerprints its own DID.
+> **Balances and settlement do NOT replicate: moving funds between nodes is a
+> consensus problem this build does not claim to have solved.**
+
+**所以两节点 swarm 共享「谁存在」，而拒绝共享「钱」。**
+预期余额会跟着 agent 跨节点的部署会失望 —— **而代码在任何人踩到之前就说了。**
+
+### 11.3 回滚
+
+见 **[docs/ROLLBACK.md](ROLLBACK.md)**。**没演练过的回滚方案不是方案，是愿望。**
+

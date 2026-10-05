@@ -1,0 +1,73 @@
+# Build context exclusions for the Docker image.
+#
+# # Why this file is not optional
+#
+# `target/` in this workspace is large — a debug build of 18 crates — and the Docker build context is
+# copied to the daemon before anything runs. Without this file, `docker build` ships gigabytes the
+# Dockerfile then ignores, and the build appears to hang with no error.
+#
+# # And it is a correctness file, not only a speed one
+#
+# `contracts/lib/` holds a Foundry dependency that CI fetches rather than commits, and `client/`
+# holds a Tauri tree whose own `target/` is separate. Copying either into the image would put
+# build artifacts of a different toolchain inside a Rust build stage.
+#
+# The entries mirror `.gitignore` deliberately: what is not in the repository should not be in the
+# image, and having the two lists agree is easier to check than having one derive from the other.
+
+# ---------------------------------------------------------------- build output
+target/
+**/target/
+*.rs.bk
+*.pdb
+
+# ---------------------------------------------------------------- runtime state
+nau-data/
+**/nau-data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.jsonl
+*.snapshot
+
+# ---------------------------------------------------------------- secrets
+# A credential must never be baked into a layer: layers are readable by anyone who can pull the
+# image, and `docker history` shows the commands even when the file is later deleted.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+secrets.json
+
+# ---------------------------------------------------------------- not needed to build the node
+client/
+DSH插件/
+docs/
+integrations/
+sdks/
+.github/
+.work/
+coverage/
+*.tgz
+
+# ---------------------------------------------------------------- toolchain artifacts
+contracts/lib/
+contracts/cache/
+contracts/out/
+node_modules/
+**/node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---------------------------------------------------------------- editors and VCS
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

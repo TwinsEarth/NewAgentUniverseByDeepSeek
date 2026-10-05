@@ -3,6 +3,112 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.9.9] — 交付工程化：**一道让我自己犯过的那个缺陷再也不可能发生的关卡**
+
+v3.8/v3.9 计划（19 版）之后的**交付审计版本**。
+新增 `env-template` **关卡**（24 → **25 道**）+ 5 个交付物 + 3 份文档。
+
+### 这道关卡为什么存在：**它抓的是我自己**
+
+在一次交付级审计中，`.env.example` 被写成只列 **9 个变量**，而**漏掉了 `NAU_API_TOKENS`**
+——**决定谁能写这个节点的那个变量** —— 以及 **`NAU_SANDBOX_BACKEND`**，**决定沙箱跑不跑的那个** ✓
+
+**根因是审计方法本身，不是粗心**：
+
+```
+env::var\("([A-Z_][A-Z0-9_]*)"\)      ← 只匹配字符串字面量
+```
+
+**而这个代码库把关键变量先声明成常量**：
+
+```rust
+pub const TOKENS_ENV: &str = "NAU_API_TOKENS";   // ← 正则看不见
+...  std::env::var(TOKENS_ENV)  ...
+```
+
+> **所以系统里最有后果的两个变量，对那个本该找到它们的检查是不可见的。**
+
+**一次性的订正会给下一个人留下同一个陷阱。这道关卡让这一类缺陷不可能发生**：
+
+* 它**按代码的方式找变量**（两种形式都找）✓
+* **两个方向都失败** ✓ —— 模板漏掉一个变量会失败，**模板写了一个没人读的变量也会失败** ✓
+* 它**点名两个关键变量**，因为「把 `NAU_API_TOKENS` 从模板里删掉」否则会被读成一次整理 ✗
+
+### 而它被**证明会失败** ✓
+
+| 实验 | 结果 |
+|---|---|
+| 删掉 `NAU_API_TOKENS` 的赋值行 | **FAIL**：`` `NAU_API_TOKENS` is read by crates\nau-node\src\auth.rs (const) but is not assigned in .env.example `` ——**`(const)` 正是我漏掉的那种形式** |
+| 加一个 `NAU_TOTALLY_INVENTED=1` | **FAIL**：`` `NAU_TOTALLY_INVENTED` is assigned in .env.example but no code reads it `` |
+| 还原 | **PASS**：22 个变量读、22 个已文档化、两向一致 |
+
+### D1 + D2：`docs/LEARNING-BOUNDARY.md`
+
+**持续学习边界**。方法可复跑，结论如实：
+
+> **本仓库是「让学习可审计、可结算、可追责」的底座，不是学习算法本身。**
+
+**实测**：`fn learn` / `fn evolve` / `self_evolve` / `continuous_learn` / `feedback_loop` /
+`policy_update` / `fn train` **全部 0** ✓
+**而 `fn adapt` 有 2 个文件、4 行命中** —— **我把它们如实列出而不是抹掉**：
+`arbiter.rs` 那处其实是 **`fn adapters`**，`hot.rs` 那两处是**插件消息从旧 API 版本到新版本的适配** ✓
+
+> **一张声称「全是 0」的表如果漏掉唯一非零的那一行，就不是核对结果而是结论的宣传。**
+
+**训练语料边界**：`training`/`dataset`/`finetune`/`lora`/`gradient`/`loss_fn`/`transformer`/`neural`
+**全 0**，`llm` 53 处（**编排**）、`checkpoint` 28 处（**沙箱快照**）✓ ——
+**本项目不训练、不微调、不托管模型** ✓
+
+**而第三条留空并说明理由**：
+「**经验数据能否当训练语料**」**是一个关于数据用途的决定，由数据主体与适用法律决定，不由代码库决定** ✓
+
+### D3a：容器内核强制（`kernel` profile）
+
+**`cap_add` 精确授权，不是 `privileged: true`** ✓ ——
+`SYS_ADMIN` / `SYS_PTRACE` / `NET_ADMIN` **逐个点名**，因为**点名让读者能看见到底授了什么**，
+而将来多要一个是一次可见的 diff ✓
+
+**代价写在同一个文件里**：**此后一个插件的路径逃逸缺陷就是宿主失陷，而不是容器失陷** ✓
+**所以它必须是 opt-in 的 profile，默认的那个必须是不假思索也能安全运行的那个。**
+
+### D3b：多节点 P2P（`p2p` profile）
+
+**两个节点、真实 libp2p swarm、四个真实参数**（`--listen` / `--room` / `--seed` / `--bootstrap`，
+**全部取自 `--help` 而非编造**）✓
+
+**而 `--help` 里最关键的一段被照抄进 compose 注释**：
+
+> **Balances and settlement do NOT replicate: moving funds between nodes is a
+> consensus problem this build does not claim to have solved.**
+
+**所以两节点 swarm 共享「谁存在」，而拒绝共享「钱」** ✓
+
+### D3c + Phase 3：工程交付面
+
+| 文件 | 内容 |
+|---|---|
+| `docs/ROLLBACK.md` | **回滚方案**：二进制/数据/配置/单插件四种粒度、**先存证再动手**、**不可以做的五件事**、演练流程 |
+| `Makefile` | 任务入口。`JOBS=2` 与 `--locked` **每次都正确**，而不是靠人记住 |
+| `Dockerfile` | 增加 `nau-p2p-daemon`；`EXPOSE 4001` |
+| `docker-compose.yml` | 默认单节点 + `kernel` + `p2p` 三个 profile |
+| `docs/DEPLOYMENT.md` | **+6 节**：环境变量索引 / 端口 / systemd / Nginx / 容器三拓扑 / 回滚指引 |
+
+### 而本版再次如实记录我自己的错误
+
+**`LEARNING-BOUNDARY.md` 的初稿里有一张「实测结果」表声称 8 个关键词全是 0，
+而我只跑过其中 7 个** ✗ —— 补跑后发现 **`fn adapt` 不是 0** ✓ —— **已订正并说明那 4 行是什么。**
+**`metric-claims` 关卡要求每个数字都有依据；一张没跑过的表就是没有依据的数字。**
+
+### 验证
+
+| | |
+|---|---|
+| 关卡 | **25 道**（24 + 1）——`Every environment variable the code reads is documented, and no others` |
+| 该关卡 | **22 个变量读、22 个已文档化、两向一致**，且**两个方向都被证明会失败** ✓ |
+| 部署检查 | **59 项**（本版不改部署面）|
+| 文档计数 | **13 条一致**（**25 道**关卡、59 项部署检查）|
+| clippy · fmt | 干净（本版无 Rust 改动）|
+
 ## [3.9.8] — 度量与风险仪表：**这份报告的价值在于它指出了哪些数字是它给不出的**
 
 E-10，**v3.9 与整个 v3.8/v3.9 计划（19 版）的收官**。

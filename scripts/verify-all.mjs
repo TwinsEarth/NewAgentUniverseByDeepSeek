@@ -720,6 +720,144 @@ gate('metric-claims', 'Every performance number in the docs carries the five ele
   };
 });
 
+gate('env-template', 'Every environment variable the code reads is documented, and no others', () => {
+  // WHY THIS GATE EXISTS
+  // --------------------
+  // This gate exists because a delivery audit of v3.9.8 found a real defect in a file written during
+  // that same audit: `.env.example` listed 9 variables and omitted `NAU_API_TOKENS` -- the variable
+  // that decides WHO MAY WRITE to the node -- and `NAU_SANDBOX_BACKEND`, which decides whether the
+  // sandbox runs anything at all.
+  //
+  // The root cause was the audit METHOD, not carelessness. The scan was
+  //
+  //     env::var\("([A-Z_][A-Z0-9_]*)"\)
+  //
+  // which matches a string literal. This codebase declares several variables as constants first:
+  //
+  //     pub const TOKENS_ENV: &str = "NAU_API_TOKENS";
+  //     ...  std::env::var(TOKENS_ENV)  ...
+  //
+  // and a literal-only regex cannot see them. So the two most consequential variables in the system
+  // were invisible to the check that was supposed to find them.
+  //
+  // A one-time correction would leave the same trap for the next person. This gate makes the class
+  // of defect impossible instead: it finds variables the way the CODE finds them -- both forms --
+  // and it fails in BOTH directions, because a template that documents a variable nothing reads is
+  // the same defect mirrored.
+  const problems = [];
+
+  const walk = (dir, filter, out = []) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (['target', 'node_modules', '.git'].includes(entry.name)) continue;
+        walk(full, filter, out);
+      } else if (filter(entry.name)) {
+        out.push(full);
+      }
+    }
+    return out;
+  };
+
+  // ---------------------------------------------------------------- what the code reads
+
+  /** @type {Map<string, string>} variable -> where it was found */
+  const inCode = new Map();
+
+  const rustFiles = walk(path.join(ROOT, 'crates'), (n) => n.endsWith('.rs'));
+  for (const file of rustFiles) {
+    const text = fs.readFileSync(file, 'utf8');
+    const rel = path.relative(ROOT, file);
+
+    // Form 1: a string literal passed straight to `env::var`.
+    for (const m of text.matchAll(/env::var\("([A-Z_][A-Z0-9_]*)"\)/g)) {
+      if (!inCode.has(m[1])) inCode.set(m[1], `${rel} (literal)`);
+    }
+    // Form 2: the constant form -- `const SOMETHING_ENV: &str = "NAME";` -- and then a `env::var`
+    // that names the constant rather than the string. This is the form the audit missed.
+    for (const m of text.matchAll(/const\s+[A-Z_][A-Z0-9_]*_ENV\s*:\s*&str\s*=\s*"([A-Z_][A-Z0-9_]*)"/g)) {
+      if (!inCode.has(m[1])) inCode.set(m[1], `${rel} (const)`);
+    }
+  }
+
+  // The scripts and SDKs are part of the delivery surface: a deployment that sets `NAU_PROFILE`
+  // changes what the deployment checks exercise, so it is a documented variable even though the
+  // node itself never reads it.
+  const jsFiles = [
+    ...walk(path.join(ROOT, 'scripts'), (n) => n.endsWith('.mjs') || n.endsWith('.js')),
+    ...walk(path.join(ROOT, 'sdks'), (n) => n.endsWith('.mjs') || n.endsWith('.js')),
+  ];
+  for (const file of jsFiles) {
+    const text = fs.readFileSync(file, 'utf8');
+    const rel = path.relative(ROOT, file);
+    for (const m of text.matchAll(/process\.env\.([A-Z_][A-Z0-9_]*)/g)) {
+      if (!inCode.has(m[1])) inCode.set(m[1], `${rel} (JS)`);
+    }
+  }
+
+  // `PATH` is the operating system's, not this repository's. It is the one variable that is
+  // deliberately not this project's to document, and it is named here rather than filtered out
+  // silently so that the exception is visible.
+  inCode.delete('PATH');
+
+  // ---------------------------------------------------------------- what the template documents
+
+  const templatePath = path.join(ROOT, '.env.example');
+  if (!fs.existsSync(templatePath)) {
+    return {
+      state: 'FAIL',
+      detail:
+        '.env.example does not exist: a deployment has no way to discover that an unset ' +
+        'NAU_API_TOKENS makes the node read-only, or that the sandbox defaults to running nothing',
+    };
+  }
+  const template = fs.readFileSync(templatePath, 'utf8');
+
+  // An assignment line, not a mention: the file's prose names variables it is explaining, and a
+  // check that counted those would pass on a template that assigned nothing at all.
+  const documented = new Set();
+  for (const m of template.matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)) documented.add(m[1]);
+
+  // ---------------------------------------------------------------- both directions
+
+  // Direction 1: a variable the code reads and the template does not assign.
+  for (const [name, where] of [...inCode].sort()) {
+    if (!documented.has(name)) {
+      problems.push(`\`${name}\` is read by ${where} but is not assigned in .env.example`);
+    }
+  }
+
+  // Direction 2: a variable the template assigns and nothing reads. This is the mirrored defect: a
+  // template that invents a variable sends a deployment looking for behaviour that does not exist.
+  for (const name of [...documented].sort()) {
+    if (!inCode.has(name)) {
+      problems.push(`\`${name}\` is assigned in .env.example but no code reads it`);
+    }
+  }
+
+  // ---------------------------------------------------------------- and the two that bite
+
+  // These two are called out by name because a change that removed either from the template would
+  // otherwise be reported as a tidy-up rather than as the loss of the two facts a deployment most
+  // needs. The reasoning is in the template itself; this is the tripwire.
+  for (const critical of ['NAU_API_TOKENS', 'NAU_SANDBOX_BACKEND']) {
+    if (!documented.has(critical)) {
+      problems.push(
+        `\`${critical}\` must stay in .env.example: unset NAU_API_TOKENS makes the node read-only, ` +
+          `and NAU_SANDBOX_BACKEND defaults to running nothing`,
+      );
+    }
+  }
+
+  if (problems.length) {
+    return { state: 'FAIL', detail: problems.join('; ') };
+  }
+  return {
+    state: 'PASS',
+    detail: `${inCode.size} variable(s) read by the code, ${documented.size} documented, and the two directions agree`,
+  };
+});
+
 gate('economy-invariants', 'The economy report is derived, conservative, and disagrees with nothing', () => {
   // WHY THIS GATE EXISTS
   // --------------------
