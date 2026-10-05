@@ -339,10 +339,36 @@ jobs:
           # `UNATTENDED=1` so `build.sh` does not prompt for a flavour; the default is `stable`.
           UNATTENDED=1 TARGET_DIR=/opt/osxcross ./build.sh
 
-          # Read back rather than assume: the wrapper is the thing the gate needs.
-          test -x /opt/osxcross/bin/x86_64-apple-darwin-clang || {
-            echo "osxcross built but the compiler wrapper is not where it was expected"; exit 1; }
-          echo "osxcross ready: $(/opt/osxcross/bin/x86_64-apple-darwin-clang --version | head -1)"
+          # * * * THE WRAPPER CARRIES THE SDK VERSION, AND THIS CHECK HAD TO LEARN THAT * * *
+          #
+          # The previous version asserted a fixed name:
+          #
+          #     test -x /opt/osxcross/bin/x86_64-apple-darwin-clang
+          #
+          # and failed with `osxcross built but the compiler wrapper is not where it was expected` --
+          # AFTER the toolchain had built successfully. osxcross puts the SDK's version in the middle
+          # of the triple, so the real wrapper is:
+          #
+          #     x86_64-apple-darwin24.5-clang
+          #
+          # The build's own summary says so ("OSXCross was built for: arm64 arm64e x86_64 x86_64h" and
+          # `testing x86_64-apple-darwin24.5-clang ... works`), and reading it is what found this.
+          #
+          # Discovering the name rather than restating it also survives an SDK bump: the cache key
+          # names the SDK version, so a new SDK rebuilds the toolchain AND changes the wrapper's name,
+          # and a hard-coded assertion would fail the same way a second time.
+          WRAPPER="$(ls /opt/osxcross/bin/x86_64-apple-darwin*-clang 2>/dev/null | head -1 || true)"
+          if [ -z "${WRAPPER}" ] || [ ! -x "${WRAPPER}" ]; then
+            echo "no x86_64-apple-darwin*-clang wrapper under /opt/osxcross/bin; contents:"
+            ls -1 /opt/osxcross/bin | head -30
+            exit 1
+          fi
+          echo "wrapper discovered: ${WRAPPER}"
+          echo "version: $("${WRAPPER}" --version | head -1)"
+
+          # Publish the discovered path for the later step, which cannot guess it either.
+          echo "OSXCROSS_WRAPPER=${WRAPPER}" >> "$GITHUB_ENV"
+          echo "OSXCROSS_CXX=${WRAPPER}++" >> "$GITHUB_ENV"
 
       - name: Expose the macOS toolchain to cargo (Linux only)
         if: runner.os == 'Linux'
@@ -350,13 +376,27 @@ jobs:
         # turn `command did not [run]` into a compile. Named per target rather than exported as a
         # bare `CC`, so that the host build is untouched -- replacing the host compiler would change
         # every other gate in this job.
+        #
+        # The paths come from `$OSXCROSS_WRAPPER`, which the build step discovered rather than
+        # assumed, because the wrapper name contains the SDK version (`x86_64-apple-darwin24.5-clang`)
+        # and a step that guessed it would fail the same way the assertion did.
+        #
+        # When the cache HITS, the build step is skipped and that variable is not set -- so it is
+        # derived again here instead of being trusted to exist.
         run: |
+          set -euo pipefail
+          WRAPPER="${OSXCROSS_WRAPPER:-$(ls /opt/osxcross/bin/x86_64-apple-darwin*-clang 2>/dev/null | head -1 || true)}"
+          if [ -z "${WRAPPER}" ] || [ ! -x "${WRAPPER}" ]; then
+            echo "the macOS toolchain is not present, so the macOS target cannot be checked here"
+            exit 1
+          fi
           {
-            echo "CC_x86_64_apple_darwin=/opt/osxcross/bin/x86_64-apple-darwin-clang"
-            echo "CXX_x86_64_apple_darwin=/opt/osxcross/bin/x86_64-apple-darwin-clang++"
-            echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=/opt/osxcross/bin/x86_64-apple-darwin-clang"
+            echo "CC_x86_64_apple_darwin=${WRAPPER}"
+            echo "CXX_x86_64_apple_darwin=${WRAPPER}++"
+            echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=${WRAPPER}"
             echo "PATH=/opt/osxcross/bin:$PATH"
           } >> "$GITHUB_ENV"
+          echo "exposed to cargo: CC_x86_64_apple_darwin=${WRAPPER}"
 
       - name: Install Foundry (the contracts-build and contracts-test gates)
         # The SAME pin the `contracts` job above already uses. That is the whole point of this
