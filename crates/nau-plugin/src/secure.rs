@@ -42,6 +42,30 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+// `Aead` rather than `AeadInOut`, and the reason is upstream rather than preference.
+//
+// `aead` 0.6 deprecated the whole `AeadInPlace` trait in favour of `AeadInOut`:
+//
+//     #[deprecated(since = "0.6.0", note = "use `AeadInOut` instead")]
+//     pub trait AeadInPlace: AeadCore { ... }
+//
+// The migration was attempted here and the compiler refused it in a way that settles the question:
+//
+//     error[E0599]: no method named `encrypt_in_place_detached` found for struct `ChaChaPoly1305`
+//       help: trait `AeadInPlace` which provides `encrypt_in_place_detached` is implemented but not
+//             in scope
+//       --> aead-0.6.1/src/lib.rs:363:5
+//
+// The help names `AeadInPlace` and NOT `AeadInOut`, which says what the source confirms:
+// `chacha20poly1305` 0.11's own `ChaChaPoly1305` does not implement the replacement trait yet. The
+// old API is deprecated and the new one is not wired up to this type, so the deprecation cannot be
+// avoided through this crate's public surface -- it is a mid-migration state upstream, not a mistake
+// in this file.
+//
+// The `#[allow(deprecated)]` below is therefore deliberate, narrow (one method each) and TEMPORARY.
+// It should be deleted the moment `chacha20poly1305` implements `AeadInOut`, and the gate that would
+// notice is `rust-lints`: an unused `#[allow]` is itself a warning under `-D warnings`, so when the
+// migration becomes possible this attribute starts failing the build and points at itself.
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use hkdf::Hkdf;
@@ -214,12 +238,24 @@ impl Channel {
                     .into(),
             ));
         }
+        // The nonce is built here and the counter was incremented above, so this value is used
+        // exactly once. The frame is `nonce || sealed`, with the nonce in the clear because the
+        // receiver needs it and it is not secret -- it is a counter, and its whole job is to never
+        // repeat under this key.
         let nonce_bytes = nonce_for(self.prefix, counter);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        // `Nonce::from` rather than `Nonce::from_slice`: `Array::from_slice` is deprecated in the
+        // same migration, and the non-deprecated path is the `From<[u8; N]>` impl on `Array`. This
+        // one takes the array BY VALUE, so it cannot fail and needs no allowance.
+        let nonce = Nonce::from(nonce_bytes);
+
+        // See the comment above the `chacha20poly1305` imports: `Aead` is deprecated in favour of
+        // `AeadInOut`, and `AeadInOut` is not implemented by this crate's own type yet. The
+        // allowance is one method wide and is meant to be deleted, not kept.
+        #[allow(deprecated)]
         let sealed = self
             .cipher
             .encrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: plaintext,
                     aad: &[],
@@ -249,10 +285,22 @@ impl Channel {
             )));
         }
         let (nonce_bytes, body) = sealed.split_at(NONCE_BYTES);
-        let nonce = Nonce::from_slice(nonce_bytes);
-        self.cipher
+        // `Nonce::try_from` rather than `Nonce::from_slice`, for the same reason as in `seal`. A
+        // borrowed slice has no compile-time length, so this is the fallible form -- and the length
+        // check above already guarantees it succeeds. It is written as fallible anyway so that a
+        // future change to that check cannot turn a refusal into a panic.
+        let nonce = Nonce::try_from(nonce_bytes).map_err(|_| {
+            PluginError::Capability(
+                "secure: the frame's nonce is not the length this construction uses".into(),
+            )
+        })?;
+        // Same allowance as `seal`, for the same upstream reason: `AeadInPlace` is deprecated in
+        // `aead` 0.6 and `AeadInOut` is not implemented by `ChaChaPoly1305` yet.
+        #[allow(deprecated)]
+        let opened = self
+            .cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: body,
                     aad: &[],
@@ -264,7 +312,8 @@ impl Channel {
                      sealed under a different key"
                         .into(),
                 )
-            })
+            })?;
+        Ok(opened)
     }
 }
 

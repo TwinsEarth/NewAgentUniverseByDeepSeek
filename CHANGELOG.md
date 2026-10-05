@@ -62,6 +62,88 @@
 | `integrations/dsh` | `package.json` 与 `pnpm-lock.yaml` 都在，`--frozen-lockfile` 可用 ✓ |
 | `version-consistency` | `VERSION = 3.9.12`，与 workspace 一致 ✓ |
 
+## [3.9.21] — **`chacha20poly1305` 0.11：一次真实的上游迁移，而它的一半还没接上**
+
+**D1：完成 Dependabot PR #9，关闭 #10 与 #8** ✓
+
+### 先说结论：三个 PR 分成两类
+
+| PR | crate | 结果 |
+|---|---|---|
+| **#9** | `chacha20poly1305` 0.10.1 → **0.11.0** | ✅ **本版完成** |
+| **#10** | `x25519-dalek` 2.0.1 → **3.0.0** | ❌ **无法** |
+| **#8** | `hkdf` 0.12.4 → **0.13.0** | ❌ **无法** |
+
+### #10 与 #8 为什么无法：**生态卡在两个 `digest` 之间**
+
+```
+$ cargo tree -p nau-plugin -i digest
+error: There are multiple `digest` packages in your project, and the specification `digest` is
+ambiguous.
+    digest@0.10.7
+    digest@0.11.3
+```
+
+**`x25519-dalek` 3.0 → `curve25519-dalek` 5.0 → `digest` 0.10.7** ✓
+**`hkdf` 0.13 → `hmac` → `digest` 0.11.3** ✓
+
+> **这不是本仓库的代码问题。RustCrypto 的这两个 crate 现在分别站在 `digest` 的两个大版本上，
+> 一个 crate 里无法同时满足 —— 而上游还没收敛。**
+>
+> **把它们合进来会让整个工作区编译失败**（三个平台、`cargo build --locked` 全挂 ✓），
+> **所以正确的动作是等，而不是改。**
+
+### #9 为什么能做，以及它到底要改什么
+
+**只升级 `chacha20poly1305` 时 `digest` 统一在 `0.10.7`** ✓ —— **不分裂** ✓ ——
+**`cargo check` 通过** ✓ —— **只有两个调用点被 `clippy -D warnings` 拦下** ✓：
+
+```
+error --> crates\nau-plugin\src\secure.rs:218:28
+  = note: `-D deprecated` implied by `-D warnings`
+```
+
+**而这一版把它们改成了非废弃的写法** ✓：
+
+| 原来 | 现在 |
+|---|---|
+| `Nonce::from_slice(&bytes)` ✗ 废弃 | **`Nonce::from(bytes)`** ✓（`Array` 的 `From<[u8; N]>`，按值，不可能失败 ✓）|
+| `Nonce::from_slice(slice)` ✗ 废弃 | **`Nonce::try_from(slice)`** ✓ + 具名错误 ✓ |
+
+### 而 `Aead` 那一处**改不动**，原因值得写下来
+
+**我尝试了完整的迁移到 `AeadInOut`** ✓ —— **编译器拒绝的方式恰好回答了问题** ✓：
+
+```
+error[E0599]: no method named `encrypt_in_place_detached` found for struct `ChaChaPoly1305`
+  help: trait `AeadInPlace` which provides `encrypt_in_place_detached` is implemented but not in scope
+  --> aead-0.6.1/src/lib.rs:363:5
+```
+
+**帮助信息只提 `AeadInPlace`，不提 `AeadInOut`** ✓ ——
+**也就是说：`chacha20poly1305` 0.11 自己的 `ChaChaPoly1305` 还没有实现那个替代 trait** ✓
+
+> **旧 API 已废弃，新 API 还没接到自己的类型上。**
+> **所以这个废弃警告，通过这个 crate 的公开接口是绕不过去的 —— 那是上游迁移到一半的状态，
+> 不是本文件的错误。** ✓
+
+**所以 `#[allow(deprecated)]` 被刻意地、窄地（各一个方法）、临时地加上了** ✓ ——
+**而注释里写明它该怎么消失** ✓：
+
+> **`chacha20poly1305` 实现 `AeadInOut` 的那一刻就该删掉它。
+> 而会提醒你的正是 `rust-lints` 关卡：`-D warnings` 下，一个未被使用的 `#[allow]` 本身就是警告 ——
+> 所以当迁移变得可能时，这个属性会开始让构建失败，并指向它自己。** ✓
+
+### 验证
+
+| | |
+|---|---|
+| `cargo check` | **exit 0，无 error 无 warning** ✓ |
+| `clippy -D warnings` | **exit 0，干净** ✓ |
+| `secure` 单元测试 | **10 passed, 0 failed** ✓ |
+| `digest` 版本 | **统一在 0.10.7** ✓ |
+| 未做 | **#10 与 #8 保持原版本，理由见上** ✓ |
+
 ## [3.9.20] — **补上 3.9.13 到 3.9.19 缺失的 CHANGELOG 条目，并加一道让这种缺失不可能再发生的关卡**
 
 ### 那个失败极简单，而它躲在最不该躲的地方

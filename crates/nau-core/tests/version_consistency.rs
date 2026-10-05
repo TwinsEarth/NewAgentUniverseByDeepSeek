@@ -52,7 +52,7 @@ fn version_is_well_formed_semver() {
         );
     }
     // This release is NewAgentUniverseByDeepSeek V1.0.1.
-    assert_eq!(v, "3.9.20", "unexpected release version");
+    assert_eq!(v, "3.9.21", "unexpected release version");
 }
 
 #[test]
