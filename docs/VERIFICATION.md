@@ -17,7 +17,7 @@
 ## 1. 一条命令
 
 ```bash
-node scripts/verify-all.mjs              # 全部 25 道关卡
+node scripts/verify-all.mjs              # 全部 26 道关卡
 node scripts/verify-all.mjs --quick      # 跳过慢关卡
 node scripts/verify-all.mjs --only=no-panics,unsafe-containment
 node scripts/verify-all.mjs --allow-missing-tools   # 把 SKIP 当作非失败

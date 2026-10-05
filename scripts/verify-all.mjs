@@ -1002,6 +1002,60 @@ gate('economy-invariants', 'The economy report is derived, conservative, and dis
   };
 });
 
+gate('changelog-entry', 'The version in VERSION has a CHANGELOG section, not just a mention', () => {
+  // WHY THIS GATE EXISTS
+  // --------------------
+  // `release.yml` has this check and `ci.yml` did not, which is the whole reason this gate is here:
+  //
+  //     grep -qF "$version" CHANGELOG.md || {
+  //       echo "::error::CHANGELOG.md has no entry for $version"; exit 1; }
+  //
+  // A check that only runs on the RELEASE path is an alarm that goes off when it is too late to do
+  // anything convenient about it. This one runs on every push, on all three platforms, and locally.
+  //
+  // What it caught, or rather what it would have caught: from v3.9.13 through v3.9.19 -- seven
+  // versions -- every release wrote notes to a file outside the repository and used them as the
+  // GitHub release body, and never added a CHANGELOG section at all. Each Release workflow then
+  // failed on this assertion after ALL TEN verification jobs had passed, so the failure looked like a
+  // publishing problem rather than a missing paragraph.
+  //
+  // The requirement is stronger than `release.yml`'s. A `grep` for the version string is satisfied by
+  // a passing mention -- "this supersedes 3.9.19" would do -- so this gate requires a SECTION HEADING
+  // of the form `## [<version>]`. The distinction matters because the thing a reader wants from a
+  // changelog is an entry, and a substring check cannot tell an entry from a sentence about one.
+  const version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim();
+  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+  if (!fs.existsSync(changelogPath)) {
+    return { state: 'FAIL', detail: 'CHANGELOG.md does not exist' };
+  }
+  const changelog = fs.readFileSync(changelogPath, 'utf8');
+
+  // `release.yml`'s condition, kept because a gate that is STRICTER than the pipeline it guards would
+  // pass while the pipeline failed -- which is worse than no gate.
+  if (!changelog.includes(version)) {
+    return {
+      state: 'FAIL',
+      detail:
+        `CHANGELOG.md does not mention ${version} at all. release.yml refuses to publish on this ` +
+        `exact condition, so the release would fail after every verification job passed.`,
+    };
+  }
+
+  // And the stronger condition this gate adds.
+  const heading = new RegExp(`^## \\[${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'm');
+  if (!heading.test(changelog)) {
+    const nearest = [...changelog.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1]).slice(0, 5);
+    return {
+      state: 'FAIL',
+      detail:
+        `CHANGELOG.md mentions ${version} but has no \`## [${version}]\` section. Add one; the ` +
+        `newest sections present are: ${nearest.join(', ')}`,
+    };
+  }
+
+  return { state: 'PASS', detail: `CHANGELOG.md has a \`## [${version}]\` section` };
+});
+
 gate('doc-counts', 'The counts the documents state match what the scripts actually define', () => {
   // WHY THIS GATE EXISTS
   // --------------------

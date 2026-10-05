@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "nau-agent"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "nau-attest"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "hex",
  "nau-core",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "nau-consensus"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-core",
  "serde",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "nau-core"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "nau-erasure"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-core",
  "serde",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "nau-http"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "async-trait",
  "rustls",
@@ -2044,14 +2044,14 @@ dependencies = [
 
 [[package]]
 name = "nau-image"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-core",
 ]
 
 [[package]]
 name = "nau-ledger"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "hex",
  "nau-core",
@@ -2062,7 +2062,7 @@ dependencies = [
 
 [[package]]
 name = "nau-libp2p"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "async-trait",
  "ed25519-dalek",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "nau-market"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-consensus",
  "nau-core",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "nau-mcp"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-core",
  "serde",
@@ -2105,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "nau-migrate"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "hex",
  "nau-core",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "nau-net"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "async-trait",
  "nau-core",
@@ -2133,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "nau-node"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "nau-plugin"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",
@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "nau-plugins"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "nau-sandbox"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "nau-core",
  "serde",
@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "nau-store"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "hex",
  "nau-core",

@@ -62,6 +62,300 @@
 | `integrations/dsh` | `package.json` 与 `pnpm-lock.yaml` 都在，`--frozen-lockfile` 可用 ✓ |
 | `version-consistency` | `VERSION = 3.9.12`，与 workspace 一致 ✓ |
 
+## [3.9.20] — **补上 3.9.13 到 3.9.19 缺失的 CHANGELOG 条目，并加一道让这种缺失不可能再发生的关卡**
+
+### 那个失败极简单，而它躲在最不该躲的地方
+
+**v3.9.19 的 CI 第一次全绿** ✓ —— 十个 job 全过，包括 **ubuntu 上的 25 道关卡** 与 **经 osxcross 真实 type-check 的 macOS 目标** ✓
+
+**而 `Release` 仍然失败** ✗ —— 失败在最后一个前提检查上：
+
+```
+VERSION=3.9.19 tag=v3.9.19 ref=v3.9.19
+##[error]CHANGELOG.md has no entry for 3.9.19
+```
+
+**从 v3.9.13 起，我每次发布都写了发布说明（`notes-39xx.md`）并把它作为 GitHub Release 的正文，
+却再也没有往 `CHANGELOG.md` 里加过一节** ✗✓
+
+### 而它连过七个版本没被发现，原因值得写下来
+
+| 检查它的地方 | 结果 |
+|---|---|
+| **`release.yml`** | ✓ **有** —— `grep -qF "$version" CHANGELOG.md` |
+| **`ci.yml`** | ✗ **没有** |
+| **本地 `verify-all.mjs`** | ✗ **没有** |
+
+**所以一个 CI 每次都跑的检查，和一个只在打 tag 时才跑的检查相比，缺了后者。**
+**而 `release.yml` 的那道检查恰恰是在所有验证都通过之后才执行的最后一步** ——
+**所以它挡住了发布，却没有在任何一次 push 时提醒过我** ✓
+
+### 顺便查明了 v3.7.1 / v3.7.2 当年「no CHANGELOG section」的同一个根因
+
+**我早先补那两个历史 Release 时发现它们没有 CHANGELOG 条目，当时把它记成「另一个缺口」** ✓
+**现在看清楚了：那是同一个根因，只是当时还没长出 `release.yml` 的这道检查** ✓
+
+### 两处修复
+
+**① 补上 v3.9.13 … v3.9.19 的七节** ✓ —— 内容取自各自的发布说明 ✓，
+**并保留每一版当时如实的自我记录**（编造的 SHA、改名后校验、写死的 wrapper 名、bash 写进 PowerShell、作业级 shell 默认值 ✓）
+
+**② 新增 `changelog-entry` 关卡** ✓ —— **它把 `release.yml` 的那条断言搬进了每次都会跑的地方** ✓：
+
+* `VERSION` 的字符串**必须出现在 `CHANGELOG.md` 里** ✓
+* **并且必须是以 `## [<version>]` 形式出现的节标题** ✓ —— 而不只是正文里偶然提到 ✓
+* **失败信息给出该加什么**，而不是只说「没有」 ✓
+
+**这一条比它看起来重要**：**一个只在发布路径上执行的检查，是一条只在为时已晚时才响的警报。**
+**关卡存在的意义正是让它在每次 push 时就响** ✓
+
+### 验证
+
+| | |
+|---|---|
+| `changelog-entry` | **新关卡**，25 → **26 道** |
+| CHANGELOG 覆盖 | **3.9.13 … 3.9.20 全部有节标题** ✓ |
+| `release.yml` 的断言 | **本地复现它并确认会通过** ✓ |
+| 工作区 | `cargo check --workspace --all-targets` 退出 0 ✓ |
+
+## [3.9.19] — **作业级 shell 默认值，而不是每个步骤都要记住的规则**
+
+**3.9.18 修了一个步骤的 shell，下一个步骤以同样的原因失败** ✗：
+
+```
+Fetch forge-std    FAILURE
+shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+fatal: repository '\' does not exist
+The term 'https://github.com/foundry-rs/forge-std' is not recognized...
+```
+
+**一个 `git clone ... \` 续行被交给了 PowerShell** ✓ —— **而它前一个步骤刚刚因为同一类原因被修过**
+（`if [ "$RUNNER_OS" = "Linux" ]; then` 交给 PowerShell，回答 `Missing '(' after 'if'`）✓
+
+**两个版本、两次、都在 gates 之前的最后几步、都在另外九个 job 已经变绿之后** ✓ ——
+**每次都像是新问题，而不是同一个问题两次** ✓
+
+**所以改成作业级默认**：
+
+```yaml
+defaults:
+  run:
+    shell: bash
+```
+
+**该类错误现在是「不可能」，而不是「已修正」** ✓ —— 那个 job 里有 **19 行 bash 特有语法**，
+**全部被这一处声明覆盖**，**包括还没人写的步骤** ✓
+
+**而仓库早就知道这件事** ✓ —— 同一个 job 里一个更早的步骤注释写着：
+
+> *`shell: bash` is load-bearing, not decoration. … `> /dev/null` is not a null device: it resolves to `D:\dev\null`*
+
+**知识是有的，只是逐步骤应用 —— 而那正是后来两个步骤能忘掉它的原因。**
+**一条每个新步骤都得重复的规则，就是一条会被忘掉的规则。** ✓
+
+### 而这一版终于全绿
+
+```
+CI   success  c4e79b7b6b
+  contracts  libp2p  rust/windows  shellcheck  conformance
+  javascript  rust/ubuntu  rust/macos  version  python
+```
+
+**`rust / ubuntu-latest` 的 `Document and artifact gates` 通过** ✓ ——
+**25 道关卡在 CI 里跑，而 macOS 目标经 osxcross 被真实 type-check（`macos ok (32s)`）** ✓
+
+## [3.9.18] — **bash 语法写进了 PowerShell 步骤，只差一个 job 就全绿**
+
+**v3.9.17 走到十之九个 job 全绿**：
+
+```
+success  rust / ubuntu-latest      ← 25 道关卡在 Linux 全过
+success  rust / macos-latest
+failure  rust / windows-latest
+```
+
+**唯一的失败还是我的** ✗ —— 日志精确点名：
+
+```
+ParserError: ...ps1:4
+   4 |  if [ "$RUNNER_OS" = "Linux" ]; then
+     |    ~
+     | Missing '(' after 'if' in if statement.
+```
+
+**我在一个没有声明 shell 的步骤里写了 bash 语法** ✓ —— **Windows runner 把脚本交给了 PowerShell** ✓
+**它失败在 gates 之前的最后一步，在九个 job 已经变绿之后** ✓
+
+**修**：给该步骤加 `shell: bash`（它后面两个步骤本来就有 ✓）✓
+
+**这一版把这条错误的家族记下来**：v3.9.10 的否定规则、v3.9.11 的空格、v3.9.12 的 CRLF、
+v3.9.13 的编造 SHA、v3.9.14 的改名、v3.9.15 的写死 wrapper 名、v3.9.17 的无法具名豁免、
+v3.9.18 的 shell —— **每一个都是「作者的机器恰好是代码假设的那台」** ✓
+**而每一个都是取回真实日志之后找到的；中途两次猜测都错了** ✓
+
+## [3.9.17] — **forge-std，以及一个「具名豁免」而不是「全开」的开关**
+
+**v3.9.16 在 ubuntu 上达到 `23 passed, 0 failed, 2 skipped`** ✓ —— 而其中最重要的那行是：
+
+```
+The workspace type-checks for the other CI platforms, not just this one
+  PASS  linux ok (33s), macos ok (32s)
+```
+
+**`macos ok` 就是 osxcross 工作的全部意义** ✓ —— **macOS 目标现在从 Linux runner 上被真实 type-check** ✓
+**而 `dsh-bundle` 也通过了** ✓ —— **意味着那个硬编码路径的修复在「不是它被写就的那台机器」上有效** ✓
+
+### ① forge-std
+
+**装 Foundry 不够，而那次运行说得很精确**：
+
+```
+Contracts compile  SKIP  contracts/lib/forge-std is absent; fetch it with:
+                         git clone --depth 1 --branch v1.9.4 ...
+```
+
+`contracts/lib/` 被 gitignore（**依赖是取来的而不是提交的 ✓** —— 这是 Foundry 的常规安排 ✓）✓
+**所以要让那些关卡真的跑而不是 SKIP，就得取它** ✓ —— **版本取自关卡自己的消息，而不是这里挑一个数字** ✓
+
+### ② 具名豁免
+
+**`cross-target` 在 Windows/macOS 上无法检查 macOS 目标**（osxcross 只支持 Linux/*BSD 主机 ✓ ——
+**这是选这条路时已知并接受的代价** ✓）✓ —— **而 SKIP 按设计会让构建失败** ✓
+
+**所以新增 `--allow-skips=<id,id>`** ✓ —— **它点名那些「SKIP 是本平台的已知限制」的关卡** ✓
+
+**它刻意不是 `--allow-missing-tools`** ✗ —— 那会一次放过所有 SKIP，**包括还没人想到的那些** ✓
+
+**而 SKIP 仍然会被打印** ✓：
+
+```
+NOT VERIFIED ON THIS PLATFORM, AND ACCEPTED (named by --allow-skips):
+  - [cross-target] The workspace type-checks for the other CI platforms...
+```
+
+**因为答案仍然是「未验证」** ✓ —— **变的只是「一个已被接受的限制要不要让构建失败」** ✓
+
+**双向验证**：不带 → `exit 1` ✓；带正确名字 → `exit 0` 且仍打印 ✓；
+**带一个不匹配的名字 → `exit 1`** ✓ —— **证明豁免是按名字的，一个被接受的 SKIP 无法夹带第二个匿名的** ✓
+
+## [3.9.16] — **osxcross 编译成功了，而关于它的那句断言是错的**
+
+**v3.9.15 走完了最难的部分** ✓：
+
+```
+Done! OSXCross is set up now.
+OSXCross was built for: arm64 arm64e x86_64 x86_64h
+testing x86_64-apple-darwin24.5-clang ... works
+```
+
+**SDK 下载并按其发布的 sha256sum 校验通过，十分钟的 cctools/ld64 干净编完** ✓
+**然后步骤失败在我自己的断言上** ✗：
+
+```
+osxcross built but the compiler wrapper is not where it was expected
+```
+
+**wrapper 把 SDK 版本编进了 triple 中间** ✓ —— **真名是 `x86_64-apple-darwin24.5-clang`** ✓
+**而步骤找的是 `x86_64-apple-darwin-clang`** ✗ —— **那个从来不存在** ✓
+
+**所以名字改为「发现」而不是「重述」** ✓（对 bin 目录做 glob ✓）——
+**这也能扛住 SDK 升级**：缓存键里含 SDK 版本 ✓，**新 SDK 会重建工具链并改变 wrapper 名** ✓
+
+**第二步也做了同样修正** ✓ —— **它现在再次推导，而不是信任 `$OSXCROSS_WRAPPER` 存在** ✓
+（**缓存命中时构建步骤被跳过，那个变量根本不会被设置** ✓ —— 否则会导出一个空的编译器 ✓）
+
+## [3.9.15] — **SDK 被改了名，然后拿原名去校验**
+
+**v3.9.14 的 osxcross 步骤走到了装完依赖，然后失败** ✗：
+
+```
+sha256sum: MacOSX15.5.sdk.tar.xz: No such file or directory
+MacOSX15.5.sdk.tar.xz: FAILED open or read
+```
+
+**原因是一行**：**归档被下载成 `/tmp/sdk.tar.xz`（一个更短更整齐的名字）** ✗，
+**然后用 `grep "MacOSX${SDK_VERSION}.sdk.tar.xz" ... | sha256sum -c -` 校验** ✓ ——
+**而 `/tmp` 里唯一的文件叫 `sdk.tar.xz`** ✓
+
+**修法是保留制品的发布名** ✓ —— **校验和文件是发布方写的、并指名它覆盖什么** ✓
+**把下载存成别的名字再去找原名，是一个没有任何好处的错误** ✓
+
+**而那次运行确立的事比失败更有价值**：**步骤真的跑了** ✓ —— 依赖装完、下载成功、校验和文件取到 ✓
+**所以 osxcross 提交、SDK 仓库、SDK tag 与资产名全是真实可达的** ✓
+**先前那次「HEAD 失败」是虚惊：curl 取它时没有任何怨言** ✓
+
+## [3.9.14] — **CI 里的 osxcross，连同它被接受的代价**
+
+**B2：装上 macOS 交叉工具链，让 `cross-target` 真的从 Linux runner 检查 macOS 目标** ✓
+**而不是把它报成不可验证** ✓
+
+**代价在做出选择之前就已说明并被接受**：macOS SDK 是从 Xcode 提取的**受许可限制的 Apple 制品** ✓；
+工具链构建**要十分钟以上** ✓；而 **osxcross 只支持 Linux/*BSD 主机** ✓ ——
+**所以 `windows-latest` 即使装了它也仍然无法检查 macOS 目标** ✓
+
+**新增**：三平台的目标安装（macOS 仅 Linux ✓）；**osxcross 钉在 `27d21e4977c9…`**（master head，**从 API 读到** ——
+**该仓库不发布 tag** ✓）；**SDK 取自 `joseluisq/macosx-sdks` 的 15.5 发布**，
+**并按其同发布的 `sha256sum.txt` 校验而不是盲信** ✓；**缓存以 osxcross 提交与 SDK 版本为键** ✓；
+**`CC_x86_64_apple_darwin` 与 cargo 链接器变量按目标设置而不是裸 `CC`** ✓（**不动宿主构建** ✓）
+
+**每一个引用都在写下之前被解析过** ✓ —— 因为更早一版把一个**凭记忆敲出来的 40 位 SHA** 钉在 action 上，
+**runner 在三个平台上都拒绝启动** ✓
+
+## [3.9.13] — **那个编出来的 action SHA：真的一直在同一个文件里**
+
+**v3.9.12 的 CI 在三个平台的 `Set up job` 就失败，一行步骤都没跑** ✗ ——
+**因为我加的一个步骤把 `foundry-rs/foundry-toolchain` 钉在一个不存在的 40 位 SHA 上** ✓：
+
+```
+##[error]Unable to resolve action `foundry-rs/foundry-toolchain@b3b07ba8...`,
+unable to find version `b3b07ba8...`
+```
+
+**真实的 SHA 就在同一个文件里** ✓ —— **`contracts` job 一直用着 `…@de808b1e… # v1.3.1`** ✓ ——
+**正确的动作是抄它，而不是造一个** ✓
+
+> **敲出来的值是猜测；从文件或 API 读出来的值是事实。** ✓
+
+**而由于同样的错误可能正躺在文件里没人注意，现在每一个 `uses:` 都经 GitHub API 核对而不是用眼睛看** ✓：
+`actions/cache` / `actions/checkout` / `actions/setup-node` / `actions/setup-python` /
+`dtolnay/rust-toolchain` / `foundry-rs/foundry-toolchain` —— **无法解析的引用：0** ✓
+
+## [3.9.12] — **两个「只在 runner 上失败」的环境差异：git 的行尾，与 CI 没装的三个工具**
+
+**v3.9.11 的修复把 Windows 的 9 个失败降到 1 个** ✓ —— 这一版修掉剩下的那些 ✓
+
+### ① `Conformance vectors regenerate byte-identically` → `regeneration CHANGED the file`
+
+**这道关卡是对的，它抓到了真东西** ✓ —— **而根因不在生成器** ✓：
+`conformance/generate.mjs` 写的是 `JSON.stringify(...) + '\n'`，**即 LF** ✓ ——
+**而仓库里没有 `.gitattributes`** ✗ —— **于是 Windows 的 git 按 `core.autocrlf=true` 把文本检出成 CRLF** ✓ ——
+**提交的文件以 CRLF 到达 runner，重新生成的却是 LF** ✓
+
+> **所以被比对的那个文件，并不是被提交的那个文件——
+> 而这道字节比对关卡是唯一注意到这件事的东西。
+> 一道字节比对检查的价值，恰好等于它所读的那次检出的价值。** ✓
+
+**修复**：新增 `.gitattributes`，`* text=auto eol=lf` ✓ —— **二进制显式标出并原样保留** ✓ ——
+**而 `conformance/vectors.json` 被点名** ✓
+
+### ② ubuntu 的 `21 passed, 0 failed, 4 skipped` 退出码是 1
+
+**而那 4 个 SKIP 不是脚本的错** ✓ —— **是这个 job 从来没装过三样东西**：
+第二个平台的 std（`rustup target add` ✓）、**forge**（`foundry-rs/foundry-toolchain` ✓）、
+**依赖闭包**（`pnpm install --frozen-lockfile`，**对着提交的 lockfile** ✓）✓
+
+**装它们是诚实的修法** ✓ —— **传 `--allow-missing-tools` 会把四个真实缺口变成四行安静的输出** ✓
+
+### ③ 而这两个失败与 v3.9.11 那个是**同一个形状**
+
+| 版本 | 环境差异 | 为什么本地看不见 |
+|---|---|---|
+| **v3.9.11** | `cmd` 在 `C:\Program Files` 的空格处切开了 node 路径 | **开发者的 node 路径没有空格** |
+| **v3.9.12** | git 把文本文件按 CRLF 检出 | **开发者的 `autocrlf=false`** |
+
+> **两次都是「作者的机器恰好就是代码所假设的那台」。
+> 而两次都不是靠推理找到的 —— 是取回真实日志之后找到的。** ✓
+
 ## [3.9.11] — 找到并修好那个让 9 道关卡在 CI 里失败的原因：**cmd 在空格处切开了 node 的路径**
 
 **这是 v3.9.10 撤掉 CI 关卡步骤后，用真实日志（而不是继续猜）查出来的真因** ✓
