@@ -1,0 +1,90 @@
+# Line endings, declared rather than inherited from the machine.
+#
+# # WHY THIS FILE EXISTS
+#
+# The `Conformance vectors regenerate byte-identically` gate compares the committed
+# `conformance/vectors.json` with a freshly generated one, byte for byte. On a GitHub Windows runner
+# it failed with `regeneration CHANGED the file` while passing on Linux, macOS and on a developer's
+# Windows machine.
+#
+# The cause was not the generator. `conformance/generate.mjs` writes `JSON.stringify(...) + '\n'`,
+# which is LF. The cause was git: with no `.gitattributes`, Windows checks out text files with CRLF
+# by default (`core.autocrlf=true`), so the committed file arrived at the runner as CRLF and the
+# regenerated one was LF. The bytes differed, and the gate was right to say so.
+#
+# So the file being compared was not the file that was committed -- and the gate that noticed is the
+# only reason this was ever seen. A byte-identity check is worth exactly as much as the checkout it
+# reads from.
+#
+# This is the second failure of the same shape in two releases. The first was
+# `scripts/verify-all.mjs` building a shell command with `process.execPath` -- `C:\Program
+# Files\nodejs\node.exe` -- where `cmd` split the path at the space. Both were environment
+# differences between a developer's machine and a runner, both looked arbitrary from the outside, and
+# both were invisible locally for the same reason: **the author's environment happened to be the one
+# the code assumed.**
+#
+# # THE RULE
+#
+# `text=auto` lets git decide what is text; `eol=lf` makes every text file check out with LF on every
+# platform. That is the right default for this repository because its artefacts are compared as
+# bytes -- `vectors.json` here, and the SHA256SUMS of the release assets -- and a checkout that
+# silently rewrites bytes makes those comparisons meaningless.
+#
+# Binary files are marked and left alone. Rewriting a `.png` or a compiled artefact is how a
+# repository acquires subtly corrupt assets that nothing notices until they are used.
+
+# ---------------------------------------------------------------- default
+* text=auto eol=lf
+
+# ---------------------------------------------------------------- explicit text types
+# Named rather than left to detection, because these are the files whose BYTES matter.
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.lock     text eol=lf
+*.md       text eol=lf
+*.json     text eol=lf
+*.mjs      text eol=lf
+*.js       text eol=lf
+*.ts       text eol=lf
+*.py       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.sh       text eol=lf
+*.sol      text eol=lf
+*.txt      text eol=lf
+*.html     text eol=lf
+*.css      text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+VERSION    text eol=lf
+
+# `vectors.json` is the reason this file exists. Called out by name so that a future change to the
+# catch-all above cannot quietly exempt it.
+conformance/vectors.json text eol=lf
+
+# ---------------------------------------------------------------- binaries: never touched
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.pdf      binary
+*.zip      binary
+*.gz       binary
+*.tgz      binary
+*.exe      binary
+*.dll      binary
+*.so       binary
+*.dylib    binary
+*.a         binary
+*.rlib     binary
+*.wasm     binary
+
+# ---------------------------------------------------------------- generated, and self-declaring
+# `Cargo.lock` IS committed here (the release build uses `--locked`), so it is text above rather than
+# ignored. Left in this section as a note: the usual advice to omit it is wrong for a binary crate
+# whose releases must be reproducible.
+#
+# `contracts/lib/` is a Foundry dependency fetched by CI, never committed -- see `.gitignore`.
+# Marked binary so that a stray vendored file cannot be line-ending-rewritten if it ever appears.
+contracts/lib/** binary

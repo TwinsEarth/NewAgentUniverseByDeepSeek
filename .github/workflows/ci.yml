@@ -214,6 +214,46 @@ jobs:
       # `cross-target`, `unsafe-containment` and `defence-in-depth` ask what the platform provides
       # rather than assuming Linux. That is also why some gates SKIP here, and they are listed as NOT
       # VERIFIED rather than hidden.
+      # ---------------------------------------------------------------------------------------
+      # The tooling the gate step needs, installed rather than skipped
+      # ---------------------------------------------------------------------------------------
+      #
+      # The first CI run of the gate step reported `21 passed, 0 failed, 4 skipped` on ubuntu and
+      # exited 1 -- because `verify-all.mjs`'s standing position is that a SKIP is "not verified"
+      # rather than "passed", and it does not pass `--allow-missing-tools` here for exactly that
+      # reason. The four SKIPs were not the script's fault; they were three tools this job never
+      # installed:
+      #
+      #   * `cross-target` needed a second platform's std installed;
+      #   * `contracts-build` and `contracts-test` needed `forge`;
+      #   * `dsh-bundle` needed the integration's dependency closure.
+      #
+      # Installing them is the honest fix. Passing `--allow-missing-tools` would have turned four
+      # real gaps into four quiet lines, which is the behaviour this repository keeps recording as
+      # the thing not to do.
+
+      - name: Add the cross-compilation targets the cross-target gate checks
+        # `cargo check` needs the target's std but not a linker, so a Linux runner can verify that
+        # the workspace compiles for macOS and Windows without cross-toolchains installed.
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add x86_64-apple-darwin
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install Foundry (the contracts-build and contracts-test gates)
+        uses: foundry-rs/foundry-toolchain@b3b07ba8b418998c39fb20f9d8b27520de0a4797 # v1
+        with:
+          version: stable
+
+      - name: Install the DSH integration's dependencies (the dsh-bundle gate)
+        # `--frozen-lockfile` so CI installs the lockfile that is committed rather than resolving a
+        # new one; a gate that passes against a dependency tree nobody committed is not evidence.
+        # `working-directory` keeps this out of the repository root, which has no pnpm project.
+        working-directory: integrations/dsh
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
       - name: Document and artifact gates (verify-all.mjs)
         run: node scripts/verify-all.mjs
         env:

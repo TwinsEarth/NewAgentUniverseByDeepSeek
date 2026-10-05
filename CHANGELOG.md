@@ -3,6 +3,65 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 版本号有唯一机器可读来源：仓库根 [`VERSION`](VERSION)。
 
+## [3.9.12] — 两个「只在 runner 上失败」的环境差异：**git 的行尾转换，与 CI 没装的三个工具**
+
+**v3.9.11 的修复把 Windows 的 9 个失败降到 1 个** ✓ —— 这一版修掉剩下的那些 ✓
+
+### ① `Conformance vectors regenerate byte-identically` → `regeneration CHANGED the file`
+
+**这道关卡是对的，它抓到了真东西** ✓ —— **而根因不在生成器**：
+
+`conformance/generate.mjs` 写的是 `JSON.stringify(...) + '\n'`，**即 LF** ✓ ——
+**而仓库里没有 `.gitattributes`** ✗ —— **于是 Windows 的 git 按 `core.autocrlf=true` 把文本文件检出成 CRLF** ✓ ——
+**提交的文件以 CRLF 到达 runner，重新生成的却是 LF** ✓ —— **字节当然不同** ✓
+
+> **所以被比对的那个文件，并不是被提交的那个文件——
+> 而这道字节比对关卡是唯一注意到这件事的东西。
+> 一道字节比对检查的价值，恰好等于它所读的那次检出的价值。**
+
+**修复**：新增 `.gitattributes`，`* text=auto eol=lf` ✓ —— **文本一律 LF 检出** ✓ ——
+**二进制显式标出并原样保留**（改写一个 `.png` 是仓库悄悄得到损坏资产的经典方式 ✓）✓
+**而 `conformance/vectors.json` 被点名**，这样将来改动通配规则也不会悄悄豁免它 ✓
+
+### ② ubuntu 的 `21 passed, 0 failed, 4 skipped` 退出码是 1
+
+**而那 4 个 SKIP 不是脚本的错** ✓ —— **是这个 job 从来没装过三样东西**：
+
+| SKIP | 缺什么 | 修复 |
+|---|---|---|
+| `cross-target` | 第二个平台的 std | `rustup target add` × 3（Linux runner 能验证 macOS/Windows 的目标，因为 `cargo check` 不需要链接器）|
+| `contracts-build` / `contracts-test` | **forge** | `foundry-rs/foundry-toolchain@v1` |
+| `dsh-bundle` | 依赖闭包 | `pnpm install --frozen-lockfile`（**用提交的 lockfile**——一个对着没人提交过的依赖树通过的关卡不是证据 ✓）|
+
+**装它们是诚实的修法** ✓ —— **传 `--allow-missing-tools` 会把四个真实缺口变成四行安静的输出，
+而那正是本仓库反复记录为「不要做」的行为** ✓
+
+### ③ 而这两个失败与 v3.9.11 那个是**同一个形状**
+
+| 版本 | 环境差异 | 为什么本地看不见 |
+|---|---|---|
+| **v3.9.11** | `cmd` 在 `C:\Program Files` 的空格处切开了 node 路径 | **开发者的 node 路径没有空格** |
+| **v3.9.12** | git 把文本文件按 CRLF 检出 | **开发者的 `autocrlf=false`** |
+
+> **两次都是「作者的机器恰好就是代码所假设的那台」。
+> 而两次都不是靠推理找到的 —— 是取回真实日志之后找到的。**
+
+**这一版把这条方法写下来，因为它比任何一次修复都更有价值**：
+
+> **在一个只在别人机器上失败的问题上，先取日志。两次猜测（`NAU_PYTHON`、`CARGO_BUILD_JOBS`）都错了，
+> 而一次日志就定位了。**
+
+### 验证
+
+| | |
+|---|---|
+| 本地全量 | **24 通过 / 0 失败 / 1 跳过**，退出码 0 ✓ |
+| `Conformance vectors` | **PASS `byte-identical`** ✓ |
+| 工作区测试 | **2006 passed, 0 failed** ✓ |
+| `ci.yml` | 无 Tab；50 个步骤；五个关键元素齐备（`verify-all` / `foundry` / `rustup target` / `pnpm install` / `deploy-local`）✓ |
+| `integrations/dsh` | `package.json` 与 `pnpm-lock.yaml` 都在，`--frozen-lockfile` 可用 ✓ |
+| `version-consistency` | `VERSION = 3.9.12`，与 workspace 一致 ✓ |
+
 ## [3.9.11] — 找到并修好那个让 9 道关卡在 CI 里失败的原因：**cmd 在空格处切开了 node 的路径**
 
 **这是 v3.9.10 撤掉 CI 关卡步骤后，用真实日志（而不是继续猜）查出来的真因** ✓
