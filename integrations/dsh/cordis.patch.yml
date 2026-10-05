@@ -5,12 +5,23 @@
 # getting this wrong is `patch: entry "<id>" not found` -- which is what this file produced while
 # it was written as a plain list. `insert` is the key that appends entries instead.
 #
-# `bin` points at this checkout's debug build so the bundle works immediately after a local
-# install. Anywhere else, either edit this line, or drop it and set `NAU_BIN` -- the tools fall
-# back to `nau` on `PATH`, and a missing binary is reported with the name of the setting to fix
-# rather than as an empty success.
+# `bin` is deliberately NOT set here.
+#
+# It used to be, and the value was one machine's absolute path:
+#
+#     bin: 'E:/DS/NewAgentUniverseByDeepSeek/target/debug/nau.exe'
+#
+# That is a drive letter that exists on one computer and a `.exe` suffix that exists on one platform,
+# so a reader anywhere else got a config that could not work -- and the `dsh-bundle` gate, which loads
+# this bundle, failed on all three CI runners with `could not run
+# \`E:/DS/NewAgentUniverseByDeepSeek/...\``. The paragraph above already offered the right answer
+# ("drop it and set `NAU_BIN`"); this file simply had not taken its own advice.
+#
+# So the line is gone. The tools fall back to `nau` on `PATH`, which is what an install produces, and
+# a missing binary is reported with the name of the setting to fix rather than as an empty success.
+# A deployment that keeps its binary somewhere unusual sets `NAU_BIN` rather than editing this file --
+# which is the difference between configuration and a patch to somebody else's checkout.
 - insert:
     - id: nau-tools
       name: '@twinsearth/nau-dsh-plugin/tools'
-      config:
-        bin: 'E:/DS/NewAgentUniverseByDeepSeek/target/debug/nau.exe'
+      config: {}

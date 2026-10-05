@@ -5,11 +5,36 @@
 // will call, that every tool passes `defineTool`'s validation, and that the two read-only tools
 // that need no node actually run.
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import path from 'node:path';
 
 // Resolved relative to this file, so the check works from a checkout, from a tarball unpacked
 // anywhere, and from the repository it lives in. An absolute path here would have made the check
 // pass only on the machine that wrote it.
 const MODULE = fileURLToPath(new URL('./lib/tools.js', import.meta.url));
+
+// * * * AND THE SAME RULE, APPLIED TO THE BINARY -- WHICH IT WAS NOT * * *
+//
+// The paragraph above was already in this file, and eleven lines below it the default binary was
+// hard-coded:
+//
+//     mod.apply(ctx, { bin: process.env.NAU_BIN ||
+//       'E:/DS/NewAgentUniverseByDeepSeek/target/debug/nau.exe' });
+//
+// That is the author's own machine, with the author's own drive letter, and a `.exe` suffix that
+// only exists on Windows. So the `dsh-bundle` gate could never pass on Linux or macOS, and it never
+// had -- it reported `could not run \`E:/DS/NewAgentUniverseByDeepSeek/...\`` on all three CI
+// runners, and nobody saw it because until v3.9.13 the gate suite did not run in CI at all.
+//
+// Deriving it is the same technique the line above already uses, plus the platform suffix: the
+// binary is `nau.exe` on Windows and `nau` elsewhere, which is why the suffix is computed rather
+// than written.
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const DEFAULT_BIN = path.join(
+  REPO_ROOT,
+  'target',
+  'debug',
+  process.platform === 'win32' ? 'nau.exe' : 'nau',
+);
 
 const registered = [];
 const ctx = {
@@ -29,7 +54,7 @@ if (typeof mod.apply !== 'function') {
 }
 console.log('inject:', JSON.stringify(mod.inject));
 
-mod.apply(ctx, { bin: process.env.NAU_BIN || 'E:/DS/NewAgentUniverseByDeepSeek/target/debug/nau.exe' });
+mod.apply(ctx, { bin: process.env.NAU_BIN || DEFAULT_BIN });
 
 console.log(`registered ${registered.length} tool(s):`);
 for (const tool of registered) {

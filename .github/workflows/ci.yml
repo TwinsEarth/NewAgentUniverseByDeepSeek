@@ -233,12 +233,112 @@ jobs:
       # the thing not to do.
 
       - name: Add the cross-compilation targets the cross-target gate checks
-        # `cargo check` needs the target's std but not a linker, so a Linux runner can verify that
-        # the workspace compiles for macOS and Windows without cross-toolchains installed.
+        # `cargo check` needs the target's std but not a linker for PURE RUST dependencies. That is
+        # true of `x86_64-pc-windows-msvc` from Linux and of `x86_64-unknown-linux-gnu` from Windows.
+        #
+        # It is NOT true of `x86_64-apple-darwin`, which is why the next step exists: some crate in
+        # the dependency graph compiles C for the target, so a target's std alone is not enough and
+        # `cc-rs` fails with `command did not [run]`. Adding the target without a toolchain turned a
+        # SKIP into a FAIL, and the fix is a toolchain rather than a narrower gate.
         run: |
           rustup target add x86_64-unknown-linux-gnu
-          rustup target add x86_64-apple-darwin
           rustup target add x86_64-pc-windows-msvc
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            rustup target add x86_64-apple-darwin
+          fi
+
+      # ---------------------------------------------------------------------------------------
+      # osxcross: a macOS toolchain for a Linux runner
+      # ---------------------------------------------------------------------------------------
+      #
+      # # WHAT THIS IS FOR, AND WHAT IT COSTS
+      #
+      # The `cross-target` gate checks that the workspace type-checks for the other two platforms, and
+      # on Linux that includes macOS. A macOS target needs a macOS SDK and a Darwin linker, which the
+      # runner does not have.
+      #
+      # osxcross supplies both, and it is a real cost that is being accepted deliberately:
+      #
+      #   * it needs the macOS SDK, which is extracted from Xcode and is a **licence-restricted
+      #     Apple artefact**. Building it in CI means downloading that artefact into a build;
+      #   * it takes **ten minutes or more** to build, which is why the result is CACHED and the build
+      #     only runs on a cache miss;
+      #   * osxcross supports **Linux and *BSD hosts only**, so `windows-latest` cannot do this check
+      #     even with the toolchain installed. On that runner the macOS target stays unverified and
+      #     the gate says so rather than pretending otherwise;
+      #   * macOS is ALSO built natively by the `macos-latest` job in this matrix, so this step is
+      #     about what the OTHER runners can see, not about whether macOS works.
+      #
+      # # EVERY REFERENCE BELOW WAS RESOLVED BEFORE BEING WRITTEN
+      #
+      # An earlier step in this workflow pinned an action to a 40-character SHA that had been typed
+      # rather than read, and the runner refused to start on all three platforms. So:
+      #
+      #   * osxcross is pinned to `27d21e4977c9751d01199c7a226a6faf494c3dd9`, the head of `master`,
+      #     read from the API. The repository publishes NO TAGS, which is why a commit is pinned.
+      #   * the SDK comes from `joseluisq/macosx-sdks`, whose releases carry `sha256sum.txt` beside
+      #     the archive -- so the download is CHECKED rather than trusted. A build that pulls an
+      #     unverified tarball into a release pipeline is a supply-chain hole with extra steps.
+      - name: Cache the osxcross toolchain
+        id: osxcross-cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /opt/osxcross
+          # The key names the two things that would invalidate the result: the osxcross commit and the
+          # SDK version. Changing either produces a different toolchain, so a cache built from the old
+          # one must not be reused.
+          key: osxcross-${{ runner.os }}-27d21e4977c9-sdk15.5
+
+      - name: Build the macOS cross-toolchain (cache miss only)
+        if: runner.os == 'Linux' && steps.osxcross-cache.outputs.cache-hit != 'true'
+        env:
+          OSXCROSS_COMMIT: 27d21e4977c9751d01199c7a226a6faf494c3dd9
+          SDK_VERSION: '15.5'
+        run: |
+          set -euo pipefail
+
+          # Dependencies osxcross names for Debian/Ubuntu.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm-dev lld libssl-dev libxml2-dev zlib1g-dev libzstd-dev xz-utils
+
+          # The SDK, and its published checksum, from the same release.
+          BASE="https://github.com/joseluisq/macosx-sdks/releases/download/${SDK_VERSION}"
+          curl -fsSL -o /tmp/sdk.tar.xz        "${BASE}/MacOSX${SDK_VERSION}.sdk.tar.xz"
+          curl -fsSL -o /tmp/sdk.sha256sum.txt "${BASE}/sha256sum.txt"
+
+          # * * * VERIFY BEFORE EXTRACTING * * *
+          # `sha256sum -c` reads the published file; if the archive does not match, this fails here
+          # rather than producing a toolchain from bytes nobody checked.
+          ( cd /tmp && grep "MacOSX${SDK_VERSION}.sdk.tar.xz" sdk.sha256sum.txt | sha256sum -c - )
+
+          git clone --filter=blob:none https://github.com/tpoechtrager/osxcross /tmp/osxcross
+          cd /tmp/osxcross
+          git checkout "${OSXCROSS_COMMIT}"
+          cp /tmp/sdk.tar.xz "tarballs/MacOSX${SDK_VERSION}.sdk.tar.xz"
+
+          # `UNATTENDED=1` so `build.sh` does not prompt for a flavour; the default is `stable`.
+          UNATTENDED=1 TARGET_DIR=/opt/osxcross ./build.sh
+
+          # Read back rather than assume: the wrapper is the thing the gate needs.
+          test -x /opt/osxcross/bin/x86_64-apple-darwin-clang || {
+            echo "osxcross built but the compiler wrapper is not where it was expected"; exit 1; }
+          echo "osxcross ready: $(/opt/osxcross/bin/x86_64-apple-darwin-clang --version | head -1)"
+
+      - name: Expose the macOS toolchain to cargo (Linux only)
+        if: runner.os == 'Linux'
+        # `cc-rs` reads `CC_<target>` and cargo reads the linker variable, so these two are what
+        # turn `command did not [run]` into a compile. Named per target rather than exported as a
+        # bare `CC`, so that the host build is untouched -- replacing the host compiler would change
+        # every other gate in this job.
+        run: |
+          {
+            echo "CC_x86_64_apple_darwin=/opt/osxcross/bin/x86_64-apple-darwin-clang"
+            echo "CXX_x86_64_apple_darwin=/opt/osxcross/bin/x86_64-apple-darwin-clang++"
+            echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=/opt/osxcross/bin/x86_64-apple-darwin-clang"
+            echo "PATH=/opt/osxcross/bin:$PATH"
+          } >> "$GITHUB_ENV"
 
       - name: Install Foundry (the contracts-build and contracts-test gates)
         # The SAME pin the `contracts` job above already uses. That is the whole point of this
